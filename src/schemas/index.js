@@ -37,3 +37,6 @@ export * from './newsletterSchemas.js';
 
 // Tier (membership/product) schemas
 export * from './tierSchemas.js';
+
+// Role schemas
+export * from './roleSchemas.js';

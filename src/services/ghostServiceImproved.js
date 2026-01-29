@@ -1199,6 +1199,40 @@ export async function getTier(id) {
 }
 
 /**
+ * Get all roles (read-only in Ghost)
+ * Roles define permission levels for staff users
+ * @param {Object} options - Query options
+ * @param {number} options.limit - Number of roles to return
+ * @param {number} options.page - Page number
+ * @returns {Promise<Object>} Roles response with meta
+ */
+export async function getRoles(options = {}) {
+  const { limit = 15, page = 1 } = options;
+
+  return await handleApiRequest('roles', 'browse', { limit, page });
+}
+
+/**
+ * Get a single role by ID (read-only in Ghost)
+ * @param {string} id - Role ID
+ * @returns {Promise<Object>} Role object
+ */
+export async function getRole(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('Role ID is required and must be a non-empty string');
+  }
+
+  try {
+    return await handleApiRequest('roles', 'read', { id }, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Role', id);
+    }
+    throw error;
+  }
+}
+
+/**
  * Health check for Ghost API connection
  */
 export async function checkHealth() {
@@ -1265,5 +1299,7 @@ export default {
   deleteTier,
   getTiers,
   getTier,
+  getRoles,
+  getRole,
   checkHealth,
 };

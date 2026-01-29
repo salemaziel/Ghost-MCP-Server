@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z } from 'zod';
 import dotenv from 'dotenv';
+import express from 'express';
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
@@ -11,6 +13,13 @@ import crypto from 'crypto';
 import { ValidationError } from './errors/index.js';
 import { validateToolInput } from './utils/validation.js';
 import { trackTempFile, cleanupTempFiles } from './utils/tempFileManager.js';
+import { mcpConfig } from './config/mcp-config.js';
+import {
+  apiKeyAuth,
+  expressErrorHandler,
+  healthCheck,
+  mcpCors,
+} from './middleware/errorMiddleware.js';
 import {
   createTagSchema,
   updateTagSchema,
@@ -32,6 +41,8 @@ import {
   createPageSchema,
   updatePageSchema,
   pageQuerySchema,
+  roleQuerySchema,
+  roleIdSchema,
 } from './schemas/index.js';
 
 // Load environment variables
@@ -88,6 +99,9 @@ const server = new McpServer({
   name: 'ghost-mcp-server',
   version: '1.0.0',
 });
+
+const sseTransports = new Map();
+const SSE_MESSAGES_ENDPOINT = '/mcp/messages';
 
 // --- Register Tools ---
 
@@ -1808,24 +1822,311 @@ server.registerTool(
   }
 );
 
+// --- Role Management Tools (Read-Only) ---
+
+// Get Roles Tool
+server.registerTool(
+  'ghost_get_roles',
+  {
+    description:
+      'Retrieves a list of all roles (permission levels) in Ghost CMS. Roles are read-only and define permissions for staff users (e.g., Administrator, Editor, Author, Contributor).',
+    inputSchema: roleQuerySchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(roleQuerySchema, rawInput, 'ghost_get_roles');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const input = validation.data;
+
+    console.error(`Executing tool: ghost_get_roles`);
+    try {
+      await loadServices();
+
+      const response = await ghostService.getRoles(input);
+      console.error(`Retrieved ${response.roles?.length || 0} roles`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(response, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_get_roles:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'Role query');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error getting roles: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Get Role Tool
+server.registerTool(
+  'ghost_get_role',
+  {
+    description:
+      'Retrieves details of a specific role by ID in Ghost CMS. Roles are read-only and cannot be modified via the API.',
+    inputSchema: roleIdSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(roleIdSchema, rawInput, 'ghost_get_role');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const { id } = validation.data;
+
+    console.error(`Executing tool: ghost_get_role for role ID: ${id}`);
+    try {
+      await loadServices();
+
+      const role = await ghostService.getRole(id);
+      console.error(`Retrieved role: ${role.name}`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(role, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_get_role:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'Role retrieval');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error getting role: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
 // --- Main Entry Point ---
+
+let httpServer = null;
+
+const startHttpSseServer = async () => {
+  const port = mcpConfig.transport.port || 3001;
+  const sseEndpoint = mcpConfig.transport.sseEndpoint || '/mcp/sse';
+  const allowedOrigins = mcpConfig.security.allowedOrigins || ['*'];
+  const apiKey = mcpConfig.security.apiKey;
+
+  const app = express();
+  const legacySseEndpoint = '/sse';
+  const legacyMessagesEndpoint = '/messages';
+
+  const resolveIssuer = (req) => `${req.protocol}://${req.get('host')}`;
+  const buildProtectedResourceMetadata = (req) => {
+    const issuer = resolveIssuer(req);
+    return {
+      resource: `${issuer}${sseEndpoint}`,
+      authorization_servers: [issuer],
+      scopes_supported: [],
+      bearer_methods_supported: ['header'],
+    };
+  };
+  const buildAuthServerMetadata = (req) => {
+    const issuer = resolveIssuer(req);
+    return {
+      issuer,
+      authorization_endpoint: `${issuer}/authorize`,
+      token_endpoint: `${issuer}/token`,
+      registration_endpoint: `${issuer}/register`,
+      response_types_supported: ['code'],
+      grant_types_supported: ['authorization_code', 'refresh_token'],
+      code_challenge_methods_supported: ['S256'],
+      token_endpoint_auth_methods_supported: ['none'],
+    };
+  };
+  const oauthNotConfigured = (req, res) => {
+    res.status(501).json({
+      error: 'oauth_not_configured',
+      message: 'OAuth is not configured for this MCP server.',
+    });
+  };
+  const handleSseConnection = async (endpointForClient, req, res, next) => {
+    try {
+      if (server.server.transport) {
+        console.error('Existing MCP transport detected; closing before new SSE connection');
+        await server.close();
+      }
+
+      const sseTransport = new SSEServerTransport(endpointForClient, res);
+      sseTransports.set(sseTransport.sessionId, sseTransport);
+      sseTransport.onclose = () => {
+        sseTransports.delete(sseTransport.sessionId);
+      };
+
+      await server.connect(sseTransport);
+    } catch (error) {
+      return next(error);
+    }
+  };
+
+  app.use(
+    express.json({
+      limit: '1mb',
+      strict: true,
+      type: 'application/json',
+    })
+  );
+
+  app.use(mcpCors(allowedOrigins));
+  if (apiKey) {
+    app.use(apiKeyAuth(apiKey));
+  }
+
+  app.get('/.well-known/oauth-protected-resource', (req, res) => {
+    res.json(buildProtectedResourceMetadata(req));
+  });
+  app.get('/.well-known/oauth-protected-resource/*', (req, res) => {
+    res.json(buildProtectedResourceMetadata(req));
+  });
+  app.get('/.well-known/oauth-authorization-server', (req, res) => {
+    res.json(buildAuthServerMetadata(req));
+  });
+  app.get('/.well-known/oauth-authorization-server/*', (req, res) => {
+    res.json(buildAuthServerMetadata(req));
+  });
+  app.get('/.well-known/openid-configuration', (req, res) => {
+    res.json(buildAuthServerMetadata(req));
+  });
+  app.get('/.well-known/openid-configuration/*', (req, res) => {
+    res.json(buildAuthServerMetadata(req));
+  });
+  app.get('/authorize', oauthNotConfigured);
+  app.post('/token', oauthNotConfigured);
+  app.post('/register', oauthNotConfigured);
+
+  app.get('/mcp/health', async (req, res, next) => {
+    try {
+      await loadServices();
+      const handler = healthCheck(ghostService);
+      return handler(req, res);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get('/health', async (req, res, next) => {
+    try {
+      await loadServices();
+      const handler = healthCheck(ghostService);
+      return handler(req, res);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get(sseEndpoint, (req, res, next) =>
+    handleSseConnection(SSE_MESSAGES_ENDPOINT, req, res, next)
+  );
+  app.get(legacySseEndpoint, (req, res, next) =>
+    handleSseConnection(legacyMessagesEndpoint, req, res, next)
+  );
+
+  app.post(SSE_MESSAGES_ENDPOINT, async (req, res, next) => {
+    try {
+      const sessionId = req.query.sessionId;
+      if (!sessionId || typeof sessionId !== 'string') {
+        res.status(400).json({ error: 'Missing sessionId parameter' });
+        return;
+      }
+
+      const transport = sseTransports.get(sessionId);
+      if (!transport) {
+        res.status(404).json({ error: 'Session not found' });
+        return;
+      }
+
+      await transport.handlePostMessage(req, res, req.body);
+    } catch (error) {
+      return next(error);
+    }
+  });
+  app.post(legacyMessagesEndpoint, async (req, res, next) => {
+    try {
+      const sessionId = req.query.sessionId;
+      if (!sessionId || typeof sessionId !== 'string') {
+        res.status(400).json({ error: 'Missing sessionId parameter' });
+        return;
+      }
+
+      const transport = sseTransports.get(sessionId);
+      if (!transport) {
+        res.status(404).json({ error: 'Session not found' });
+        return;
+      }
+
+      await transport.handlePostMessage(req, res, req.body);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.use(expressErrorHandler);
+
+  httpServer = app.listen(port, () => {
+    console.error(`Ghost MCP Server (HTTP/SSE) listening on port ${port}`);
+    console.error(`Health: http://localhost:${port}/mcp/health`);
+    console.error(`SSE: http://localhost:${port}${sseEndpoint}`);
+  });
+};
 
 async function main() {
   console.error('Starting Ghost MCP Server...');
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  const transportType = process.env.MCP_TRANSPORT || 'stdio';
 
-  console.error('Ghost MCP Server running on stdio transport');
+  switch (transportType) {
+    case 'stdio': {
+      const transport = new StdioServerTransport();
+      await server.connect(transport);
+      console.error('Ghost MCP Server running on stdio transport');
+      break;
+    }
+    case 'http':
+    case 'sse': {
+      await startHttpSseServer();
+      break;
+    }
+    default:
+      throw new Error(`Unknown transport type: ${transportType}`);
+  }
+
   console.error(
     'Available tools: ghost_get_tags, ghost_create_tag, ghost_get_tag, ghost_update_tag, ghost_delete_tag, ghost_upload_image, ' +
       'ghost_create_post, ghost_get_posts, ghost_get_post, ghost_search_posts, ghost_update_post, ghost_delete_post, ' +
       'ghost_get_pages, ghost_get_page, ghost_create_page, ghost_update_page, ghost_delete_page, ghost_search_pages, ' +
       'ghost_create_member, ghost_update_member, ghost_delete_member, ghost_get_members, ghost_get_member, ghost_search_members, ' +
       'ghost_get_newsletters, ghost_get_newsletter, ghost_create_newsletter, ghost_update_newsletter, ghost_delete_newsletter, ' +
-      'ghost_get_tiers, ghost_get_tier, ghost_create_tier, ghost_update_tier, ghost_delete_tier'
+      'ghost_get_tiers, ghost_get_tier, ghost_create_tier, ghost_update_tier, ghost_delete_tier, ' +
+      'ghost_get_roles, ghost_get_role'
   );
 }
+
+const shutdown = async () => {
+  try {
+    if (httpServer) {
+      await new Promise((resolve) => httpServer.close(resolve));
+    }
+    await server.close();
+  } catch (error) {
+    console.error('Error during shutdown:', error);
+  } finally {
+    process.exit(0);
+  }
+};
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 main().catch((error) => {
   console.error('Fatal error starting MCP server:', error);

@@ -262,6 +262,26 @@ MCP_TRANSPORT=http ghost-mcp
 MCP_TRANSPORT=websocket ghost-mcp
 ```
 
+### HTTP/SSE Endpoints (Inspector Compatibility)
+
+When using `MCP_TRANSPORT=http`, the server exposes the following endpoints:
+
+- **SSE stream:** `http://localhost:3001/mcp/sse` (alias: `http://localhost:3001/sse`)
+- **Message POST:** `http://localhost:3001/mcp/messages` (alias: `http://localhost:3001/messages`)
+- **Health:** `http://localhost:3001/mcp/health` (alias: `http://localhost:3001/health`)
+
+For MCP Inspector, use the `/sse` alias by default: `http://localhost:3001/sse`.
+
+#### OAuth Discovery
+
+The HTTP server returns minimal OAuth discovery metadata so clients that auto-discover OAuth don’t fail:
+
+- `/.well-known/oauth-protected-resource`
+- `/.well-known/oauth-authorization-server`
+- `/.well-known/openid-configuration`
+
+Note: OAuth is **not** implemented; these endpoints advertise placeholders only.
+
 ### Available npm Scripts
 
 For development, the following scripts are available:

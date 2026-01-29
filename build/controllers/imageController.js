@@ -127,7 +127,7 @@ const getDefaultAltText = (originalName) => {
     // Attempt to remove common prefixes/suffixes added during upload/processing
     const nameWithoutIds = originalFilename.replace(/^(processed-|mcp-upload-)\d+-\d+-?/, '');
     return nameWithoutIds.replace(/[-_]/g, ' ') || 'Uploaded image';
-  } catch (e) {
+  } catch (_e) {
     return 'Uploaded image'; // Fallback
   }
 };

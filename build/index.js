@@ -1,10 +1,10 @@
+#!/usr/bin/env node
 import express from 'express';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
 import postRoutes from './routes/postRoutes.js'; // Import post routes
 import imageRoutes from './routes/imageRoutes.js'; // Import image routes
 import tagRoutes from './routes/tagRoutes.js'; // Import tag routes
-import { startMCPServer } from './mcp_server.js'; // Import MCP server start function
 import { createContextLogger } from './utils/logger.js';
 
 // Load environment variables from .env file
@@ -15,7 +15,6 @@ const logger = createContextLogger('main');
 
 const app = express();
 const restApiPort = process.env.PORT || 3000;
-const mcpPort = process.env.MCP_PORT || 3001; // Allow configuring MCP port
 
 // Apply security headers with Helmet (OWASP recommended)
 app.use(
@@ -71,7 +70,7 @@ app.use('/api/images', imageRoutes);
 app.use('/api/tags', tagRoutes);
 
 // Global error handler for Express
-app.use((err, req, res, next) => {
+app.use((err, req, res, _next) => {
   const statusCode = err.statusCode || err.response?.status || 500;
 
   logger.error('Express error handler triggered', {
@@ -90,9 +89,8 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start both servers
-const startServers = async () => {
-  // Start Express server
+// Start Express server
+const startServer = () => {
   app.listen(restApiPort, () => {
     logger.info('Express REST API server started', {
       port: restApiPort,
@@ -100,16 +98,6 @@ const startServers = async () => {
       type: 'server_start',
     });
   });
-
-  // Start MCP server
-  await startMCPServer(mcpPort);
 };
 
-startServers().catch((error) => {
-  logger.error('Failed to start servers', {
-    error: error.message,
-    stack: error.stack,
-    type: 'server_start_error',
-  });
-  process.exit(1);
-});
+startServer();

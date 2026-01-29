@@ -24,7 +24,7 @@ import {
 
 dotenv.config();
 
-console.log('Initializing Enhanced MCP Server...');
+console.error('Initializing Enhanced MCP Server...');
 
 // Initialize components
 const resourceManager = new ResourceManager(ghostService);
@@ -48,7 +48,7 @@ const mcpServer = new MCPServer({
 
 // --- Register Resources with Enhanced Fetching ---
 
-console.log('Registering enhanced resources...');
+console.error('Registering enhanced resources...');
 
 // Ghost Post Resource
 const postResource = resourceManager.registerResource(
@@ -127,7 +127,7 @@ mcpServer.addResource(tagResource);
 
 // --- Enhanced Tools ---
 
-console.log('Registering enhanced tools...');
+console.error('Registering enhanced tools...');
 
 // Batch Operations Tool
 const batchOperationsTool = new Tool({
@@ -434,7 +434,7 @@ const subscriptionTool = new Tool({
         input.uri,
         (event) => {
           // In a real implementation, this would send events to the client
-          console.log('Resource update:', event);
+          console.error('Resource update:', event);
         },
         input.options || {}
       );
@@ -462,23 +462,24 @@ const subscriptionTool = new Tool({
 mcpServer.addTool(subscriptionTool);
 
 // Keep existing tools (create_post, upload_image, etc.) from previous implementation
-// ... (include the tools from mcp_server_improved.js)
+// ... (include the tools from mcp_server.js)
 
 // --- Enhanced Transport with Middleware ---
 
 const startEnhancedMCPServer = async (transport = 'http', options = {}) => {
   try {
-    console.log(`Starting Enhanced MCP Server with ${transport} transport...`);
+    console.error(`Starting Enhanced MCP Server with ${transport} transport...`);
 
     switch (transport) {
-      case 'stdio':
+      case 'stdio': {
         const stdioTransport = new StdioServerTransport();
         await mcpServer.connect(stdioTransport);
-        console.log('Enhanced MCP Server running on stdio transport');
+        console.error('Enhanced MCP Server running on stdio transport');
         break;
+      }
 
       case 'http':
-      case 'sse':
+      case 'sse': {
         const port = options.port || 3001;
         const app = express();
 
@@ -552,10 +553,10 @@ const startEnhancedMCPServer = async (transport = 'http', options = {}) => {
         await mcpServer.connect(sseTransport);
 
         const server = app.listen(port, () => {
-          console.log(`Enhanced MCP Server (SSE) listening on port ${port}`);
-          console.log(`Health: http://localhost:${port}/health`);
-          console.log(`Resources: http://localhost:${port}/resources`);
-          console.log(`SSE: http://localhost:${port}/mcp/sse`);
+          console.error(`Enhanced MCP Server (SSE) listening on port ${port}`);
+          console.error(`Health: http://localhost:${port}/health`);
+          console.error(`Resources: http://localhost:${port}/resources`);
+          console.error(`SSE: http://localhost:${port}/mcp/sse`);
         });
 
         mcpServer._httpServer = server;
@@ -566,13 +567,14 @@ const startEnhancedMCPServer = async (transport = 'http', options = {}) => {
         });
 
         break;
+      }
 
-      case 'websocket':
+      case 'websocket': {
         const wsPort = options.port || 3001;
         const wss = new WebSocketServer({ port: wsPort });
 
         wss.on('connection', async (ws) => {
-          console.log('New WebSocket connection');
+          console.error('New WebSocket connection');
 
           const wsTransport = new WebSocketServerTransport(ws);
           await mcpServer.connect(wsTransport);
@@ -614,27 +616,28 @@ const startEnhancedMCPServer = async (transport = 'http', options = {}) => {
           });
         });
 
-        console.log(`Enhanced MCP Server (WebSocket) listening on port ${wsPort}`);
+        console.error(`Enhanced MCP Server (WebSocket) listening on port ${wsPort}`);
         mcpServer._wss = wss;
         break;
+      }
 
       default:
         throw new Error(`Unknown transport type: ${transport}`);
     }
 
     // Log capabilities
-    console.log('Server Capabilities:');
-    console.log(
+    console.error('Server Capabilities:');
+    console.error(
       '- Resources:',
       mcpServer.listResources().map((r) => r.name)
     );
-    console.log(
+    console.error(
       '- Tools:',
       mcpServer.listTools().map((t) => t.name)
     );
-    console.log('- Cache enabled with LRU eviction');
-    console.log('- Subscription support for real-time updates');
-    console.log('- Batch operations for efficiency');
+    console.error('- Cache enabled with LRU eviction');
+    console.error('- Subscription support for real-time updates');
+    console.error('- Batch operations for efficiency');
   } catch (error) {
     errorLogger.logError(error);
     console.error('Failed to start Enhanced MCP Server:', error);
@@ -644,7 +647,7 @@ const startEnhancedMCPServer = async (transport = 'http', options = {}) => {
 
 // Graceful shutdown
 const shutdown = async () => {
-  console.log('\nShutting down Enhanced MCP Server...');
+  console.error('\nShutting down Enhanced MCP Server...');
 
   // Clear all subscriptions
   resourceManager.subscriptionManager.subscriptions.clear();
