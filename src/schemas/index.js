@@ -49,3 +49,6 @@ export * from './userSchemas.js';
 
 // Webhook schemas
 export * from './webhookSchemas.js';
+
+// Invite schemas
+export * from './inviteSchemas.js';

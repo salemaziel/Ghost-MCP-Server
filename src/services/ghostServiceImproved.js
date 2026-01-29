@@ -1312,6 +1312,68 @@ export async function deleteOffer(id) {
 }
 
 /**
+ * Get all pending invites
+ * Invites are sent to prospective Ghost staff members
+ * @param {Object} options - Query options
+ * @param {number} options.limit - Number of invites to return (default: 15)
+ * @param {number} options.page - Page number (default: 1)
+ * @param {string} options.filter - NQL filter string
+ * @param {string} options.order - Sort order (e.g., "created_at desc")
+ * @returns {Promise<Array>} Array of invite objects
+ */
+export async function getInvites(options = {}) {
+  const { limit = 15, page = 1, filter, order } = options;
+
+  const queryOptions = { limit, page };
+  if (filter) queryOptions.filter = filter;
+  if (order) queryOptions.order = order;
+
+  return await handleApiRequest('invites', 'browse', queryOptions);
+}
+
+/**
+ * Create a new staff invitation
+ * Sends an invite email to join Ghost as a staff member
+ * @param {Object} inviteData - Invitation data
+ * @param {string} inviteData.role_id - ID of the role to assign (e.g., Author, Editor, Administrator)
+ * @param {string} inviteData.email - Email address of the invitee
+ * @param {string} [inviteData.expires_at] - Optional expiry datetime (ISO 8601)
+ * @returns {Promise<Object>} Created invite object
+ */
+export async function createInvite(inviteData) {
+  if (!inviteData || typeof inviteData !== 'object') {
+    throw new ValidationError('Invite data must be a valid object');
+  }
+
+  const result = await handleApiRequest('invites', 'add', {
+    invites: [inviteData],
+  });
+
+  return result.invites?.[0] || result;
+}
+
+/**
+ * Delete (revoke) a pending invitation
+ * Removes an invite before it has been accepted
+ * @param {string} id - Invite ID
+ * @returns {Promise<Object>} Deletion result
+ */
+export async function deleteInvite(id) {
+  if (!id || typeof id !== 'string') {
+    throw new ValidationError('Invite ID is required and must be a string');
+  }
+
+  try {
+    return await handleApiRequest('invites', 'delete', { id });
+  } catch (error) {
+    if (error.response?.status === 404) {
+      throw new NotFoundError(`Invite with ID ${id} not found`);
+    }
+    throw error;
+  }
+}
+
+/**
  * Create a new webhook
  * Webhooks notify external services of Ghost events
  * @param {Object} webhookData - Webhook configuration
@@ -1598,6 +1660,9 @@ export default {
   createOffer,
   updateOffer,
   deleteOffer,
+  getInvites,
+  createInvite,
+  deleteInvite,
   createWebhook,
   updateWebhook,
   deleteWebhook,

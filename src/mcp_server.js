@@ -46,6 +46,9 @@ import {
   createOfferSchema,
   updateOfferSchema,
   deleteOfferSchema,
+  inviteQuerySchema,
+  createInviteSchema,
+  deleteInviteSchema,
   roleQuerySchema,
   roleIdSchema,
   createWebhookSchema,
@@ -2045,6 +2048,122 @@ server.registerTool(
   }
 );
 
+// --- Invite Management Tools (Staff Invitations) ---
+
+// Get Invites Tool
+server.registerTool(
+  'ghost_get_invites',
+  {
+    description:
+      'Retrieves pending staff invitations in Ghost CMS. Invites are sent to prospective staff members to join as authors, editors, or administrators. Supports pagination and filtering.',
+    inputSchema: inviteQuerySchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(inviteQuerySchema, rawInput, 'ghost_get_invites');
+    if (!validation.success) {
+      return validation.error;
+    }
+
+    try {
+      console.error(`Executing tool: ghost_get_invites`);
+      await loadServices();
+      const invites = await ghostService.getInvites(validation.data);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(invites, null, 2) }],
+        structuredContent: { invites },
+      };
+    } catch (error) {
+      console.error(`Error in ghost_get_invites:`, error);
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: `Failed to retrieve invites: ${error.message}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Create Invite Tool
+server.registerTool(
+  'ghost_create_invite',
+  {
+    description:
+      'Creates a new staff invitation in Ghost CMS. Sends an invite email to a prospective staff member. Requires role_id (use ghost_get_roles to find role IDs) and email address.',
+    inputSchema: createInviteSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(createInviteSchema, rawInput, 'ghost_create_invite');
+    if (!validation.success) {
+      return validation.error;
+    }
+
+    try {
+      console.error(`Executing tool: ghost_create_invite`);
+      await loadServices();
+      const invite = await ghostService.createInvite(validation.data);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(invite, null, 2) }],
+        structuredContent: { invite },
+      };
+    } catch (error) {
+      console.error(`Error in ghost_create_invite:`, error);
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: `Failed to create invite: ${error.message}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Delete Invite Tool
+server.registerTool(
+  'ghost_delete_invite',
+  {
+    description:
+      'Deletes (revokes) a pending staff invitation in Ghost CMS. This permanently removes an invitation before it has been accepted. Requires invite ID.',
+    inputSchema: deleteInviteSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(deleteInviteSchema, rawInput, 'ghost_delete_invite');
+    if (!validation.success) {
+      return validation.error;
+    }
+
+    try {
+      console.error(`Executing tool: ghost_delete_invite`);
+      await loadServices();
+      await ghostService.deleteInvite(validation.data.id);
+
+      return {
+        content: [{ type: 'text', text: `Invite ${validation.data.id} deleted successfully` }],
+        structuredContent: { success: true, id: validation.data.id },
+      };
+    } catch (error) {
+      console.error(`Error in ghost_delete_invite:`, error);
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: `Failed to delete invite: ${error.message}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
 // --- Webhook Management Tools ---
 
 // Create Webhook Tool
@@ -2605,6 +2724,7 @@ async function main() {
       'ghost_get_newsletters, ghost_get_newsletter, ghost_create_newsletter, ghost_update_newsletter, ghost_delete_newsletter, ' +
       'ghost_get_tiers, ghost_get_tier, ghost_create_tier, ghost_update_tier, ghost_delete_tier, ' +
       'ghost_get_offers, ghost_get_offer, ghost_create_offer, ghost_update_offer, ghost_delete_offer, ' +
+      'ghost_get_invites, ghost_create_invite, ghost_delete_invite, ' +
       'ghost_create_webhook, ghost_update_webhook, ghost_delete_webhook, ' +
       'ghost_get_users, ghost_get_user, ghost_update_user, ghost_delete_user, ' +
       'ghost_get_roles, ghost_get_role'
