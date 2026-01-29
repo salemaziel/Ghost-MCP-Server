@@ -1199,6 +1199,400 @@ export async function getTier(id) {
 }
 
 /**
+ * Get all offers with pagination and filtering
+ * Offers are promotional discounts/trials for membership tiers
+ * @param {Object} options - Query options
+ * @param {number} options.limit - Number of offers to return
+ * @param {number} options.page - Page number
+ * @param {string} options.filter - NQL filter string
+ * @param {string} options.order - Sort order
+ * @returns {Promise<Object>} Offers response with meta
+ */
+export async function getOffers(options = {}) {
+  const { limit = 15, page = 1, filter, order } = options;
+  const params = { limit, page };
+
+  if (filter) params.filter = filter;
+  if (order) params.order = order;
+
+  // handleApiRequest expects browse calls as (resource, action, {}, options)
+  return await handleApiRequest('offers', 'browse', {}, params);
+}
+
+/**
+ * Get a single offer by ID
+ * @param {string} id - Offer ID
+ * @returns {Promise<Object>} Offer object
+ */
+export async function getOffer(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('Offer ID is required and must be a non-empty string');
+  }
+
+  try {
+    return await handleApiRequest('offers', 'read', { id }, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Offer', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Create a new offer
+ * @param {Object} offerData - Offer data
+ * @param {string} offerData.name - Offer name
+ * @param {string} offerData.code - Unique offer code for redemption
+ * @param {string} offerData.type - Offer type (percent, fixed, trial)
+ * @param {string} offerData.cadence - Billing cadence (month, year)
+ * @param {number} offerData.amount - Discount amount
+ * @param {string} offerData.duration - Duration type (once, repeating, forever, trial)
+ * @param {string} offerData.tier_id - Tier ID to apply offer to
+ * @returns {Promise<Object>} Created offer object
+ */
+export async function createOffer(offerData) {
+  if (!offerData || typeof offerData !== 'object') {
+    throw new ValidationError('Offer data is required and must be an object');
+  }
+
+  const requiredFields = ['name', 'code', 'type', 'cadence', 'amount', 'duration', 'tier_id'];
+  for (const field of requiredFields) {
+    if (!offerData[field]) {
+      throw new ValidationError(`Offer ${field} is required`);
+    }
+  }
+
+  return await handleApiRequest('offers', 'add', { offers: [offerData] });
+}
+
+/**
+ * Update an existing offer
+ * Note: Only display fields can be updated (name, display_title, display_description, code)
+ * @param {string} id - Offer ID
+ * @param {Object} offerData - Offer data to update
+ * @returns {Promise<Object>} Updated offer object
+ */
+export async function updateOffer(id, offerData) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('Offer ID is required and must be a non-empty string');
+  }
+
+  if (!offerData || typeof offerData !== 'object') {
+    throw new ValidationError('Offer data is required and must be an object');
+  }
+
+  try {
+    return await handleApiRequest('offers', 'edit', { id, offers: [offerData] }, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Offer', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Delete an offer by ID
+ * @param {string} id - Offer ID
+ * @returns {Promise<void>}
+ */
+export async function deleteOffer(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('Offer ID is required and must be a non-empty string');
+  }
+
+  try {
+    return await handleApiRequest('offers', 'delete', {}, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Offer', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Get all pending invites
+ * Invites are sent to prospective Ghost staff members
+ * @param {Object} options - Query options
+ * @param {number} options.limit - Number of invites to return (default: 15)
+ * @param {number} options.page - Page number (default: 1)
+ * @param {string} options.filter - NQL filter string
+ * @param {string} options.order - Sort order (e.g., "created_at desc")
+ * @returns {Promise<Array>} Array of invite objects
+ */
+export async function getInvites(options = {}) {
+  const { limit = 15, page = 1, filter, order } = options;
+
+  const queryOptions = { limit, page };
+  if (filter) queryOptions.filter = filter;
+  if (order) queryOptions.order = order;
+
+  // handleApiRequest expects browse calls as (resource, action, {}, options)
+  return await handleApiRequest('invites', 'browse', {}, queryOptions);
+}
+
+/**
+ * Create a new staff invitation
+ * Sends an invite email to join Ghost as a staff member
+ * @param {Object} inviteData - Invitation data
+ * @param {string} inviteData.role_id - ID of the role to assign (e.g., Author, Editor, Administrator)
+ * @param {string} inviteData.email - Email address of the invitee
+ * @param {string} [inviteData.expires_at] - Optional expiry datetime (ISO 8601)
+ * @returns {Promise<Object>} Created invite object
+ */
+export async function createInvite(inviteData) {
+  if (!inviteData || typeof inviteData !== 'object') {
+    throw new ValidationError('Invite data must be a valid object');
+  }
+
+  const result = await handleApiRequest('invites', 'add', {
+    invites: [inviteData],
+  });
+
+  return result.invites?.[0] || result;
+}
+
+/**
+ * Delete (revoke) a pending invitation
+ * Removes an invite before it has been accepted
+ * @param {string} id - Invite ID
+ * @returns {Promise<Object>} Deletion result
+ */
+export async function deleteInvite(id) {
+  if (!id || typeof id !== 'string') {
+    throw new ValidationError('Invite ID is required and must be a string');
+  }
+
+  try {
+    return await handleApiRequest('invites', 'delete', { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError(`Invite with ID ${id} not found`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Create a new webhook
+ * Webhooks notify external services of Ghost events
+ * @param {Object} webhookData - Webhook configuration
+ * @param {string} webhookData.event - Event type (e.g., 'post.published', 'member.added')
+ * @param {string} webhookData.target_url - URL to receive webhook POST requests
+ * @param {string} [webhookData.name] - Optional webhook name
+ * @param {string} [webhookData.secret] - Optional secret for signature verification
+ * @param {string} [webhookData.api_version] - Optional Ghost API version
+ * @param {string} [webhookData.integration_id] - Optional integration ID
+ * @returns {Promise<Object>} Created webhook object
+ */
+export async function createWebhook(webhookData) {
+  if (!webhookData || typeof webhookData !== 'object') {
+    throw new ValidationError('Webhook data must be a valid object');
+  }
+
+  const result = await handleApiRequest('webhooks', 'add', {
+    webhooks: [webhookData],
+  });
+
+  return result.webhooks?.[0] || result;
+}
+
+/**
+ * Update an existing webhook
+ * @param {string} id - Webhook ID
+ * @param {Object} webhookData - Webhook fields to update
+ * @param {string} [webhookData.event] - Event type
+ * @param {string} [webhookData.target_url] - Target URL
+ * @param {string} [webhookData.name] - Webhook name
+ * @param {string} [webhookData.api_version] - API version
+ * @returns {Promise<Object>} Updated webhook object
+ */
+export async function updateWebhook(id, webhookData) {
+  if (!id || typeof id !== 'string') {
+    throw new ValidationError('Webhook ID is required and must be a string');
+  }
+
+  if (!webhookData || typeof webhookData !== 'object') {
+    throw new ValidationError('Webhook data must be a valid object');
+  }
+
+  try {
+    const result = await handleApiRequest('webhooks', 'edit', {
+      id,
+      webhooks: [webhookData],
+    });
+
+    return result.webhooks?.[0] || result;
+  } catch (error) {
+    if (error.response?.status === 404) {
+      throw new NotFoundError(`Webhook with ID ${id} not found`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Delete a webhook
+ * @param {string} id - Webhook ID
+ * @returns {Promise<Object>} Deletion result
+ */
+export async function deleteWebhook(id) {
+  if (!id || typeof id !== 'string') {
+    throw new ValidationError('Webhook ID is required and must be a string');
+  }
+
+  try {
+    return await handleApiRequest('webhooks', 'delete', { id });
+  } catch (error) {
+    if (error.response?.status === 404) {
+      throw new NotFoundError(`Webhook with ID ${id} not found`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Get all users (staff members)
+ * Users represent Ghost staff (authors, editors, administrators)
+ * @param {Object} options - Query options
+ * @param {number} options.limit - Number of users to return (default: 15)
+ * @param {number} options.page - Page number (default: 1)
+ * @param {string} options.filter - NQL filter string
+ * @param {string} options.order - Sort order (e.g., "name asc")
+ * @param {string} options.include - Related data to include (roles, count.posts)
+ * @returns {Promise<Array>} Array of user objects
+ */
+export async function getUsers(options = {}) {
+  const { limit = 15, page = 1, filter, order, include } = options;
+
+  const queryOptions = { limit, page };
+  if (filter) queryOptions.filter = filter;
+  if (order) queryOptions.order = order;
+  if (include) queryOptions.include = include;
+
+  // handleApiRequest expects browse calls as (resource, action, {}, options)
+  return await handleApiRequest('users', 'browse', {}, queryOptions);
+}
+
+/**
+ * Get a single user by ID
+ * @param {string} id - User ID (24-character hex string)
+ * @returns {Promise<Object>} User object
+ * @throws {ValidationError} If ID is invalid
+ * @throws {NotFoundError} If user not found
+ */
+export async function getUser(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('User ID is required and must be a non-empty string');
+  }
+
+  try {
+    return await handleApiRequest('users', 'read', {}, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('User', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Update a user's profile
+ * @param {string} id - User ID
+ * @param {Object} userData - User data to update
+ * @param {string} userData.name - User's display name
+ * @param {string} userData.email - User's email address
+ * @param {string} userData.bio - User biography
+ * @param {string} userData.location - User location
+ * @param {string} userData.website - User website URL
+ * @param {string} userData.facebook - Facebook username
+ * @param {string} userData.twitter - Twitter handle
+ * @param {string} userData.profile_image - Profile image URL
+ * @param {string} userData.cover_image - Cover image URL
+ * @returns {Promise<Object>} Updated user object
+ * @throws {ValidationError} If required fields are missing
+ * @throws {NotFoundError} If user not found
+ */
+export async function updateUser(id, userData) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('User ID is required and must be a non-empty string');
+  }
+
+  if (!userData || typeof userData !== 'object' || Object.keys(userData).length === 0) {
+    throw new ValidationError('User data is required for update');
+  }
+
+  try {
+    return await handleApiRequest('users', 'edit', userData, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('User', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Delete a user (staff member)
+ * Note: Cannot delete the currently authenticated user (self-delete protection)
+ * @param {string} id - User ID to delete
+ * @returns {Promise<Object>} Deletion confirmation
+ * @throws {ValidationError} If ID is invalid
+ * @throws {NotFoundError} If user not found
+ */
+export async function deleteUser(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('User ID is required and must be a non-empty string');
+  }
+
+  try {
+    return await handleApiRequest('users', 'delete', {}, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('User', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Get all roles (read-only in Ghost)
+ * Roles define permission levels for staff users
+ * @param {Object} options - Query options
+ * @param {number} options.limit - Number of roles to return
+ * @param {number} options.page - Page number
+ * @returns {Promise<Object>} Roles response with meta
+ */
+export async function getRoles(options = {}) {
+  const { limit = 15, page = 1 } = options;
+
+  // handleApiRequest expects browse calls as (resource, action, {}, options)
+  return await handleApiRequest('roles', 'browse', {}, { limit, page });
+}
+
+/**
+ * Get a single role by ID (read-only in Ghost)
+ * @param {string} id - Role ID
+ * @returns {Promise<Object>} Role object
+ */
+export async function getRole(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('Role ID is required and must be a non-empty string');
+  }
+
+  try {
+    return await handleApiRequest('roles', 'read', { id }, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Role', id);
+    }
+    throw error;
+  }
+}
+
+/**
  * Health check for Ghost API connection
  */
 export async function checkHealth() {
@@ -1265,5 +1659,22 @@ export default {
   deleteTier,
   getTiers,
   getTier,
+  getOffers,
+  getOffer,
+  createOffer,
+  updateOffer,
+  deleteOffer,
+  getInvites,
+  createInvite,
+  deleteInvite,
+  createWebhook,
+  updateWebhook,
+  deleteWebhook,
+  getUsers,
+  getUser,
+  updateUser,
+  deleteUser,
+  getRoles,
+  getRole,
   checkHealth,
 };

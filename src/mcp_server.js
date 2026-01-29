@@ -2061,7 +2061,7 @@ server.registerTool(
   async (rawInput) => {
     const validation = validateToolInput(inviteQuerySchema, rawInput, 'ghost_get_invites');
     if (!validation.success) {
-      return validation.error;
+      return validation.errorResponse;
     }
 
     try {
@@ -2568,10 +2568,11 @@ const startHttpSseServer = async () => {
   };
   const handleSseConnection = async (endpointForClient, req, res, next) => {
     try {
-      if (server.server.transport) {
-        console.error('Existing MCP transport detected; closing before new SSE connection');
-        await server.close();
-      }
+      // Note: Allow concurrent SSE connections - don't close existing transport
+      // if (server.server.transport) {
+      //   console.error('Existing MCP transport detected; closing before new SSE connection');
+      //   await server.close();
+      // }
 
       const sseTransport = new SSEServerTransport(endpointForClient, res);
       sseTransports.set(sseTransport.sessionId, sseTransport);

@@ -1215,7 +1215,8 @@ export async function getOffers(options = {}) {
   if (filter) params.filter = filter;
   if (order) params.order = order;
 
-  return await handleApiRequest('offers', 'browse', params);
+  // handleApiRequest expects browse calls as (resource, action, {}, options)
+  return await handleApiRequest('offers', 'browse', {}, params);
 }
 
 /**
@@ -1328,7 +1329,8 @@ export async function getInvites(options = {}) {
   if (filter) queryOptions.filter = filter;
   if (order) queryOptions.order = order;
 
-  return await handleApiRequest('invites', 'browse', queryOptions);
+  // handleApiRequest expects browse calls as (resource, action, {}, options)
+  return await handleApiRequest('invites', 'browse', {}, queryOptions);
 }
 
 /**
@@ -1366,7 +1368,7 @@ export async function deleteInvite(id) {
   try {
     return await handleApiRequest('invites', 'delete', { id });
   } catch (error) {
-    if (error.response?.status === 404) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
       throw new NotFoundError(`Invite with ID ${id} not found`);
     }
     throw error;
@@ -1470,7 +1472,8 @@ export async function getUsers(options = {}) {
   if (order) queryOptions.order = order;
   if (include) queryOptions.include = include;
 
-  return await handleApiRequest('users', 'browse', queryOptions);
+  // handleApiRequest expects browse calls as (resource, action, {}, options)
+  return await handleApiRequest('users', 'browse', {}, queryOptions);
 }
 
 /**
@@ -1565,7 +1568,8 @@ export async function deleteUser(id) {
 export async function getRoles(options = {}) {
   const { limit = 15, page = 1 } = options;
 
-  return await handleApiRequest('roles', 'browse', { limit, page });
+  // handleApiRequest expects browse calls as (resource, action, {}, options)
+  return await handleApiRequest('roles', 'browse', {}, { limit, page });
 }
 
 /**
