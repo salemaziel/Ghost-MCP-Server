@@ -1426,7 +1426,7 @@ export async function updateWebhook(id, webhookData) {
 
     return result.webhooks?.[0] || result;
   } catch (error) {
-    if (error.response?.status === 404) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
       throw new NotFoundError(`Webhook with ID ${id} not found`);
     }
     throw error;
@@ -1446,7 +1446,7 @@ export async function deleteWebhook(id) {
   try {
     return await handleApiRequest('webhooks', 'delete', { id });
   } catch (error) {
-    if (error.response?.status === 404) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
       throw new NotFoundError(`Webhook with ID ${id} not found`);
     }
     throw error;
