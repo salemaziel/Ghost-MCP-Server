@@ -48,6 +48,10 @@ import {
   deleteOfferSchema,
   roleQuerySchema,
   roleIdSchema,
+  userQuerySchema,
+  userIdSchema,
+  updateUserSchema,
+  deleteUserSchema,
 } from './schemas/index.js';
 
 // Load environment variables
@@ -2038,6 +2042,162 @@ server.registerTool(
   }
 );
 
+// --- User Management Tools (Staff Members) ---
+
+// Get Users Tool
+server.registerTool(
+  'ghost_get_users',
+  {
+    description:
+      'Retrieves a list of staff users in Ghost CMS. Users are Ghost staff members (authors, editors, administrators). Supports pagination and filtering.',
+    inputSchema: userQuerySchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(userQuerySchema, rawInput, 'ghost_get_users');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const input = validation.data;
+
+    console.error(`Executing tool: ghost_get_users`);
+    try {
+      await loadServices();
+
+      const response = await ghostService.getUsers(input);
+      console.error(`Retrieved ${response.users?.length || 0} users`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(response, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_get_users:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'User query');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error getting users: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Get User Tool
+server.registerTool(
+  'ghost_get_user',
+  {
+    description:
+      'Retrieves a specific staff user by ID in Ghost CMS. Returns detailed information about the user including profile, bio, and role information.',
+    inputSchema: userIdSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(userIdSchema, rawInput, 'ghost_get_user');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const { id } = validation.data;
+
+    console.error(`Executing tool: ghost_get_user with ID: ${id}`);
+    try {
+      await loadServices();
+
+      const user = await ghostService.getUser(id);
+      console.error(`Retrieved user: ${user.name || user.email}`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(user, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_get_user:`, error);
+      return {
+        content: [{ type: 'text', text: `Error getting user: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Update User Tool
+server.registerTool(
+  'ghost_update_user',
+  {
+    description:
+      "Updates a staff user's profile in Ghost CMS. Can update name, email, bio, location, website, social media links, and profile/cover images. Cannot create new users (use invites for that).",
+    inputSchema: updateUserSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(updateUserSchema, rawInput, 'ghost_update_user');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const { id, ...userData } = validation.data;
+
+    console.error(`Executing tool: ghost_update_user for user ID: ${id}`);
+    try {
+      await loadServices();
+
+      const updatedUser = await ghostService.updateUser(id, userData);
+      console.error(`Successfully updated user: ${updatedUser.name || updatedUser.email}`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(updatedUser, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_update_user:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'User update data');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error updating user: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Delete User Tool
+server.registerTool(
+  'ghost_delete_user',
+  {
+    description:
+      'Deletes a staff user from Ghost CMS. Note: Cannot delete the currently authenticated user (self-delete protection). Use with caution as this action is permanent.',
+    inputSchema: deleteUserSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(deleteUserSchema, rawInput, 'ghost_delete_user');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const { id } = validation.data;
+
+    console.error(`Executing tool: ghost_delete_user for user ID: ${id}`);
+    try {
+      await loadServices();
+
+      const result = await ghostService.deleteUser(id);
+      console.error(`Successfully deleted user with ID: ${id}`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_delete_user:`, error);
+      return {
+        content: [{ type: 'text', text: `Error deleting user: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
 // --- Role Management Tools (Read-Only) ---
 
 // Get Roles Tool
@@ -2325,6 +2485,7 @@ async function main() {
       'ghost_get_newsletters, ghost_get_newsletter, ghost_create_newsletter, ghost_update_newsletter, ghost_delete_newsletter, ' +
       'ghost_get_tiers, ghost_get_tier, ghost_create_tier, ghost_update_tier, ghost_delete_tier, ' +
       'ghost_get_offers, ghost_get_offer, ghost_create_offer, ghost_update_offer, ghost_delete_offer, ' +
+      'ghost_get_users, ghost_get_user, ghost_update_user, ghost_delete_user, ' +
       'ghost_get_roles, ghost_get_role'
   );
 }

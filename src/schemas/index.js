@@ -43,3 +43,6 @@ export * from './offerSchemas.js';
 
 // Role schemas
 export * from './roleSchemas.js';
+
+// User schemas
+export * from './userSchemas.js';

@@ -1312,6 +1312,109 @@ export async function deleteOffer(id) {
 }
 
 /**
+ * Get all users (staff members)
+ * Users represent Ghost staff (authors, editors, administrators)
+ * @param {Object} options - Query options
+ * @param {number} options.limit - Number of users to return (default: 15)
+ * @param {number} options.page - Page number (default: 1)
+ * @param {string} options.filter - NQL filter string
+ * @param {string} options.order - Sort order (e.g., "name asc")
+ * @param {string} options.include - Related data to include (roles, count.posts)
+ * @returns {Promise<Array>} Array of user objects
+ */
+export async function getUsers(options = {}) {
+  const { limit = 15, page = 1, filter, order, include } = options;
+
+  const queryOptions = { limit, page };
+  if (filter) queryOptions.filter = filter;
+  if (order) queryOptions.order = order;
+  if (include) queryOptions.include = include;
+
+  return await handleApiRequest('users', 'browse', queryOptions);
+}
+
+/**
+ * Get a single user by ID
+ * @param {string} id - User ID (24-character hex string)
+ * @returns {Promise<Object>} User object
+ * @throws {ValidationError} If ID is invalid
+ * @throws {NotFoundError} If user not found
+ */
+export async function getUser(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('User ID is required and must be a non-empty string');
+  }
+
+  try {
+    return await handleApiRequest('users', 'read', {}, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('User', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Update a user's profile
+ * @param {string} id - User ID
+ * @param {Object} userData - User data to update
+ * @param {string} userData.name - User's display name
+ * @param {string} userData.email - User's email address
+ * @param {string} userData.bio - User biography
+ * @param {string} userData.location - User location
+ * @param {string} userData.website - User website URL
+ * @param {string} userData.facebook - Facebook username
+ * @param {string} userData.twitter - Twitter handle
+ * @param {string} userData.profile_image - Profile image URL
+ * @param {string} userData.cover_image - Cover image URL
+ * @returns {Promise<Object>} Updated user object
+ * @throws {ValidationError} If required fields are missing
+ * @throws {NotFoundError} If user not found
+ */
+export async function updateUser(id, userData) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('User ID is required and must be a non-empty string');
+  }
+
+  if (!userData || typeof userData !== 'object' || Object.keys(userData).length === 0) {
+    throw new ValidationError('User data is required for update');
+  }
+
+  try {
+    return await handleApiRequest('users', 'edit', userData, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('User', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Delete a user (staff member)
+ * Note: Cannot delete the currently authenticated user (self-delete protection)
+ * @param {string} id - User ID to delete
+ * @returns {Promise<Object>} Deletion confirmation
+ * @throws {ValidationError} If ID is invalid
+ * @throws {NotFoundError} If user not found
+ */
+export async function deleteUser(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('User ID is required and must be a non-empty string');
+  }
+
+  try {
+    return await handleApiRequest('users', 'delete', {}, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('User', id);
+    }
+    throw error;
+  }
+}
+
+/**
  * Get all roles (read-only in Ghost)
  * Roles define permission levels for staff users
  * @param {Object} options - Query options
@@ -1417,6 +1520,10 @@ export default {
   createOffer,
   updateOffer,
   deleteOffer,
+  getUsers,
+  getUser,
+  updateUser,
+  deleteUser,
   getRoles,
   getRole,
   checkHealth,
