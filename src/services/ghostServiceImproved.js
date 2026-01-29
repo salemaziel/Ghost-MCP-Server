@@ -1312,6 +1312,84 @@ export async function deleteOffer(id) {
 }
 
 /**
+ * Create a new webhook
+ * Webhooks notify external services of Ghost events
+ * @param {Object} webhookData - Webhook configuration
+ * @param {string} webhookData.event - Event type (e.g., 'post.published', 'member.added')
+ * @param {string} webhookData.target_url - URL to receive webhook POST requests
+ * @param {string} [webhookData.name] - Optional webhook name
+ * @param {string} [webhookData.secret] - Optional secret for signature verification
+ * @param {string} [webhookData.api_version] - Optional Ghost API version
+ * @param {string} [webhookData.integration_id] - Optional integration ID
+ * @returns {Promise<Object>} Created webhook object
+ */
+export async function createWebhook(webhookData) {
+  if (!webhookData || typeof webhookData !== 'object') {
+    throw new ValidationError('Webhook data must be a valid object');
+  }
+
+  const result = await handleApiRequest('webhooks', 'add', {
+    webhooks: [webhookData],
+  });
+
+  return result.webhooks?.[0] || result;
+}
+
+/**
+ * Update an existing webhook
+ * @param {string} id - Webhook ID
+ * @param {Object} webhookData - Webhook fields to update
+ * @param {string} [webhookData.event] - Event type
+ * @param {string} [webhookData.target_url] - Target URL
+ * @param {string} [webhookData.name] - Webhook name
+ * @param {string} [webhookData.api_version] - API version
+ * @returns {Promise<Object>} Updated webhook object
+ */
+export async function updateWebhook(id, webhookData) {
+  if (!id || typeof id !== 'string') {
+    throw new ValidationError('Webhook ID is required and must be a string');
+  }
+
+  if (!webhookData || typeof webhookData !== 'object') {
+    throw new ValidationError('Webhook data must be a valid object');
+  }
+
+  try {
+    const result = await handleApiRequest('webhooks', 'edit', {
+      id,
+      webhooks: [webhookData],
+    });
+
+    return result.webhooks?.[0] || result;
+  } catch (error) {
+    if (error.response?.status === 404) {
+      throw new NotFoundError(`Webhook with ID ${id} not found`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Delete a webhook
+ * @param {string} id - Webhook ID
+ * @returns {Promise<Object>} Deletion result
+ */
+export async function deleteWebhook(id) {
+  if (!id || typeof id !== 'string') {
+    throw new ValidationError('Webhook ID is required and must be a string');
+  }
+
+  try {
+    return await handleApiRequest('webhooks', 'delete', { id });
+  } catch (error) {
+    if (error.response?.status === 404) {
+      throw new NotFoundError(`Webhook with ID ${id} not found`);
+    }
+    throw error;
+  }
+}
+
+/**
  * Get all users (staff members)
  * Users represent Ghost staff (authors, editors, administrators)
  * @param {Object} options - Query options
@@ -1520,6 +1598,9 @@ export default {
   createOffer,
   updateOffer,
   deleteOffer,
+  createWebhook,
+  updateWebhook,
+  deleteWebhook,
   getUsers,
   getUser,
   updateUser,

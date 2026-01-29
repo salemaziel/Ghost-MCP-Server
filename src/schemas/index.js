@@ -46,3 +46,6 @@ export * from './roleSchemas.js';
 
 // User schemas
 export * from './userSchemas.js';
+
+// Webhook schemas
+export * from './webhookSchemas.js';

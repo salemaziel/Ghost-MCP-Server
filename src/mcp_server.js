@@ -48,6 +48,9 @@ import {
   deleteOfferSchema,
   roleQuerySchema,
   roleIdSchema,
+  createWebhookSchema,
+  updateWebhookSchema,
+  deleteWebhookSchema,
   userQuerySchema,
   userIdSchema,
   updateUserSchema,
@@ -2042,6 +2045,123 @@ server.registerTool(
   }
 );
 
+// --- Webhook Management Tools ---
+
+// Create Webhook Tool
+server.registerTool(
+  'ghost_create_webhook',
+  {
+    description:
+      'Creates a new webhook in Ghost CMS. Webhooks notify external services when specific events occur (e.g., post published, member added). Requires event type and target URL.',
+    inputSchema: createWebhookSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(createWebhookSchema, rawInput, 'ghost_create_webhook');
+    if (!validation.success) {
+      return validation.error;
+    }
+
+    try {
+      console.error(`Executing tool: ghost_create_webhook`);
+      await loadServices();
+      const webhook = await ghostService.createWebhook(validation.data);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(webhook, null, 2) }],
+        structuredContent: { webhook },
+      };
+    } catch (error) {
+      console.error(`Error in ghost_create_webhook:`, error);
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: `Failed to create webhook: ${error.message}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Update Webhook Tool
+server.registerTool(
+  'ghost_update_webhook',
+  {
+    description:
+      'Updates an existing webhook in Ghost CMS. Can modify event type, target URL, name, or API version. Requires webhook ID.',
+    inputSchema: updateWebhookSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(updateWebhookSchema, rawInput, 'ghost_update_webhook');
+    if (!validation.success) {
+      return validation.error;
+    }
+
+    try {
+      console.error(`Executing tool: ghost_update_webhook`);
+      await loadServices();
+      const { id, ...webhookData } = validation.data;
+      const webhook = await ghostService.updateWebhook(id, webhookData);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(webhook, null, 2) }],
+        structuredContent: { webhook },
+      };
+    } catch (error) {
+      console.error(`Error in ghost_update_webhook:`, error);
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: `Failed to update webhook: ${error.message}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Delete Webhook Tool
+server.registerTool(
+  'ghost_delete_webhook',
+  {
+    description:
+      'Deletes a webhook from Ghost CMS. This permanently removes the webhook configuration. Requires webhook ID.',
+    inputSchema: deleteWebhookSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(deleteWebhookSchema, rawInput, 'ghost_delete_webhook');
+    if (!validation.success) {
+      return validation.error;
+    }
+
+    try {
+      console.error(`Executing tool: ghost_delete_webhook`);
+      await loadServices();
+      await ghostService.deleteWebhook(validation.data.id);
+
+      return {
+        content: [{ type: 'text', text: `Webhook ${validation.data.id} deleted successfully` }],
+        structuredContent: { success: true, id: validation.data.id },
+      };
+    } catch (error) {
+      console.error(`Error in ghost_delete_webhook:`, error);
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: `Failed to delete webhook: ${error.message}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
 // --- User Management Tools (Staff Members) ---
 
 // Get Users Tool
@@ -2485,6 +2605,7 @@ async function main() {
       'ghost_get_newsletters, ghost_get_newsletter, ghost_create_newsletter, ghost_update_newsletter, ghost_delete_newsletter, ' +
       'ghost_get_tiers, ghost_get_tier, ghost_create_tier, ghost_update_tier, ghost_delete_tier, ' +
       'ghost_get_offers, ghost_get_offer, ghost_create_offer, ghost_update_offer, ghost_delete_offer, ' +
+      'ghost_create_webhook, ghost_update_webhook, ghost_delete_webhook, ' +
       'ghost_get_users, ghost_get_user, ghost_update_user, ghost_delete_user, ' +
       'ghost_get_roles, ghost_get_role'
   );
