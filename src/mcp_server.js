@@ -41,6 +41,11 @@ import {
   createPageSchema,
   updatePageSchema,
   pageQuerySchema,
+  offerQuerySchema,
+  offerIdSchema,
+  createOfferSchema,
+  updateOfferSchema,
+  deleteOfferSchema,
   roleQuerySchema,
   roleIdSchema,
 } from './schemas/index.js';
@@ -1822,6 +1827,217 @@ server.registerTool(
   }
 );
 
+// --- Offer Management Tools ---
+
+// Get Offers Tool
+server.registerTool(
+  'ghost_get_offers',
+  {
+    description:
+      'Retrieves a list of promotional offers in Ghost CMS. Offers provide discounts or trials for membership tiers.',
+    inputSchema: offerQuerySchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(offerQuerySchema, rawInput, 'ghost_get_offers');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const input = validation.data;
+
+    console.error(`Executing tool: ghost_get_offers`);
+    try {
+      await loadServices();
+
+      const response = await ghostService.getOffers(input);
+      console.error(`Retrieved ${response.offers?.length || 0} offers`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(response, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_get_offers:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'Offer query');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error getting offers: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Get Offer Tool
+server.registerTool(
+  'ghost_get_offer',
+  {
+    description: 'Retrieves details of a specific promotional offer by ID in Ghost CMS.',
+    inputSchema: offerIdSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(offerIdSchema, rawInput, 'ghost_get_offer');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const { id } = validation.data;
+
+    console.error(`Executing tool: ghost_get_offer for offer ID: ${id}`);
+    try {
+      await loadServices();
+
+      const offer = await ghostService.getOffer(id);
+      console.error(`Retrieved offer: ${offer.name}`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(offer, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_get_offer:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'Offer retrieval');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error getting offer: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Create Offer Tool
+server.registerTool(
+  'ghost_create_offer',
+  {
+    description:
+      'Creates a new promotional offer in Ghost CMS with discount/trial details and redemption code.',
+    inputSchema: createOfferSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(createOfferSchema, rawInput, 'ghost_create_offer');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const input = validation.data;
+
+    console.error(`Executing tool: ghost_create_offer`);
+    try {
+      await loadServices();
+
+      const offer = await ghostService.createOffer(input);
+      console.error(`Offer created successfully. Offer ID: ${offer.id}, Code: ${offer.code}`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(offer, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_create_offer:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'Offer creation');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error creating offer: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Update Offer Tool
+server.registerTool(
+  'ghost_update_offer',
+  {
+    description:
+      'Updates an existing promotional offer in Ghost CMS. Only display fields can be modified (name, display_title, display_description, code).',
+    inputSchema: updateOfferSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(updateOfferSchema, rawInput, 'ghost_update_offer');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const { id, ...updateData } = validation.data;
+
+    console.error(`Executing tool: ghost_update_offer for offer ID: ${id}`);
+    try {
+      await loadServices();
+
+      const offer = await ghostService.updateOffer(id, updateData);
+      console.error(`Offer updated successfully. Offer ID: ${offer.id}`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(offer, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_update_offer:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'Offer update');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error updating offer: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Delete Offer Tool
+server.registerTool(
+  'ghost_delete_offer',
+  {
+    description:
+      'Deletes a promotional offer from Ghost CMS by ID. This operation is permanent and cannot be undone.',
+    inputSchema: deleteOfferSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(deleteOfferSchema, rawInput, 'ghost_delete_offer');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const { id } = validation.data;
+
+    console.error(`Executing tool: ghost_delete_offer for offer ID: ${id}`);
+    try {
+      await loadServices();
+
+      await ghostService.deleteOffer(id);
+      console.error(`Offer deleted successfully. Offer ID: ${id}`);
+
+      return {
+        content: [{ type: 'text', text: `Offer ${id} has been successfully deleted.` }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_delete_offer:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'Offer deletion');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error deleting offer: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
 // --- Role Management Tools (Read-Only) ---
 
 // Get Roles Tool
@@ -2108,6 +2324,7 @@ async function main() {
       'ghost_create_member, ghost_update_member, ghost_delete_member, ghost_get_members, ghost_get_member, ghost_search_members, ' +
       'ghost_get_newsletters, ghost_get_newsletter, ghost_create_newsletter, ghost_update_newsletter, ghost_delete_newsletter, ' +
       'ghost_get_tiers, ghost_get_tier, ghost_create_tier, ghost_update_tier, ghost_delete_tier, ' +
+      'ghost_get_offers, ghost_get_offer, ghost_create_offer, ghost_update_offer, ghost_delete_offer, ' +
       'ghost_get_roles, ghost_get_role'
   );
 }

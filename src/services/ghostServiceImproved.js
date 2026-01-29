@@ -1199,6 +1199,119 @@ export async function getTier(id) {
 }
 
 /**
+ * Get all offers with pagination and filtering
+ * Offers are promotional discounts/trials for membership tiers
+ * @param {Object} options - Query options
+ * @param {number} options.limit - Number of offers to return
+ * @param {number} options.page - Page number
+ * @param {string} options.filter - NQL filter string
+ * @param {string} options.order - Sort order
+ * @returns {Promise<Object>} Offers response with meta
+ */
+export async function getOffers(options = {}) {
+  const { limit = 15, page = 1, filter, order } = options;
+  const params = { limit, page };
+
+  if (filter) params.filter = filter;
+  if (order) params.order = order;
+
+  return await handleApiRequest('offers', 'browse', params);
+}
+
+/**
+ * Get a single offer by ID
+ * @param {string} id - Offer ID
+ * @returns {Promise<Object>} Offer object
+ */
+export async function getOffer(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('Offer ID is required and must be a non-empty string');
+  }
+
+  try {
+    return await handleApiRequest('offers', 'read', { id }, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Offer', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Create a new offer
+ * @param {Object} offerData - Offer data
+ * @param {string} offerData.name - Offer name
+ * @param {string} offerData.code - Unique offer code for redemption
+ * @param {string} offerData.type - Offer type (percent, fixed, trial)
+ * @param {string} offerData.cadence - Billing cadence (month, year)
+ * @param {number} offerData.amount - Discount amount
+ * @param {string} offerData.duration - Duration type (once, repeating, forever, trial)
+ * @param {string} offerData.tier_id - Tier ID to apply offer to
+ * @returns {Promise<Object>} Created offer object
+ */
+export async function createOffer(offerData) {
+  if (!offerData || typeof offerData !== 'object') {
+    throw new ValidationError('Offer data is required and must be an object');
+  }
+
+  const requiredFields = ['name', 'code', 'type', 'cadence', 'amount', 'duration', 'tier_id'];
+  for (const field of requiredFields) {
+    if (!offerData[field]) {
+      throw new ValidationError(`Offer ${field} is required`);
+    }
+  }
+
+  return await handleApiRequest('offers', 'add', { offers: [offerData] });
+}
+
+/**
+ * Update an existing offer
+ * Note: Only display fields can be updated (name, display_title, display_description, code)
+ * @param {string} id - Offer ID
+ * @param {Object} offerData - Offer data to update
+ * @returns {Promise<Object>} Updated offer object
+ */
+export async function updateOffer(id, offerData) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('Offer ID is required and must be a non-empty string');
+  }
+
+  if (!offerData || typeof offerData !== 'object') {
+    throw new ValidationError('Offer data is required and must be an object');
+  }
+
+  try {
+    return await handleApiRequest('offers', 'edit', { id, offers: [offerData] }, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Offer', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Delete an offer by ID
+ * @param {string} id - Offer ID
+ * @returns {Promise<void>}
+ */
+export async function deleteOffer(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('Offer ID is required and must be a non-empty string');
+  }
+
+  try {
+    return await handleApiRequest('offers', 'delete', {}, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Offer', id);
+    }
+    throw error;
+  }
+}
+
+/**
  * Get all roles (read-only in Ghost)
  * Roles define permission levels for staff users
  * @param {Object} options - Query options
@@ -1299,6 +1412,11 @@ export default {
   deleteTier,
   getTiers,
   getTier,
+  getOffers,
+  getOffer,
+  createOffer,
+  updateOffer,
+  deleteOffer,
   getRoles,
   getRole,
   checkHealth,
