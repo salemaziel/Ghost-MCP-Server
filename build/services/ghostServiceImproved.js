@@ -11,8 +11,11 @@ import {
   CircuitBreaker,
   retryWithBackoff,
 } from '../errors/index.js';
+import { createContextLogger } from '../utils/logger.js';
 
 dotenv.config();
+
+const logger = createContextLogger('ghost-service-improved');
 
 const { GHOST_ADMIN_API_URL, GHOST_ADMIN_API_KEY } = process.env;
 
@@ -54,7 +57,7 @@ const handleApiRequest = async (resource, action, data = {}, options = {}, confi
   // Main execution function
   const executeRequest = async () => {
     try {
-      console.log(`Executing Ghost API request: ${operation}`);
+      console.error(`Executing Ghost API request: ${operation}`);
 
       let result;
 
@@ -78,7 +81,7 @@ const handleApiRequest = async (resource, action, data = {}, options = {}, confi
           result = await api[resource][action](data);
       }
 
-      console.log(`Successfully executed Ghost API request: ${operation}`);
+      console.error(`Successfully executed Ghost API request: ${operation}`);
       return result;
     } catch (error) {
       // Transform Ghost API errors into our error types
@@ -95,13 +98,13 @@ const handleApiRequest = async (resource, action, data = {}, options = {}, confi
   try {
     return await retryWithBackoff(wrappedExecute, {
       maxAttempts: maxRetries,
-      onRetry: (attempt, error) => {
-        console.log(`Retrying ${operation} (attempt ${attempt}/${maxRetries})`);
+      onRetry: (attempt, _error) => {
+        console.error(`Retrying ${operation} (attempt ${attempt}/${maxRetries})`);
 
         // Log circuit breaker state if relevant
         if (useCircuitBreaker) {
           const state = ghostCircuitBreaker.getState();
-          console.log(`Circuit breaker state:`, state);
+          console.error(`Circuit breaker state:`, state);
         }
       },
     });
@@ -161,7 +164,7 @@ const validators = {
       errors.push({ field: 'name', message: 'Tag name is required' });
     }
 
-    if (tagData.slug && !/^[a-z0-9\-]+$/.test(tagData.slug)) {
+    if (tagData.slug && !/^[a-z0-9-]+$/.test(tagData.slug)) {
       errors.push({
         field: 'slug',
         message: 'Slug must contain only lowercase letters, numbers, and hyphens',
@@ -170,6 +173,27 @@ const validators = {
 
     if (errors.length > 0) {
       throw new ValidationError('Tag validation failed', errors);
+    }
+  },
+
+  validateTagUpdateData(updateData) {
+    const errors = [];
+
+    // Name is optional in updates, but if provided, it cannot be empty
+    if (updateData.name !== undefined && updateData.name.trim().length === 0) {
+      errors.push({ field: 'name', message: 'Tag name cannot be empty' });
+    }
+
+    // Validate slug format if provided
+    if (updateData.slug && !/^[a-z0-9-]+$/.test(updateData.slug)) {
+      errors.push({
+        field: 'slug',
+        message: 'Slug must contain only lowercase letters, numbers, and hyphens',
+      });
+    }
+
+    if (errors.length > 0) {
+      throw new ValidationError('Tag update validation failed', errors);
     }
   },
 
@@ -183,6 +207,57 @@ const validators = {
       await fs.access(imagePath);
     } catch {
       throw new NotFoundError('Image file', imagePath);
+    }
+  },
+
+  validatePageData(pageData) {
+    const errors = [];
+
+    if (!pageData.title || pageData.title.trim().length === 0) {
+      errors.push({ field: 'title', message: 'Title is required' });
+    }
+
+    if (!pageData.html && !pageData.mobiledoc) {
+      errors.push({ field: 'content', message: 'Either html or mobiledoc content is required' });
+    }
+
+    if (pageData.status && !['draft', 'published', 'scheduled'].includes(pageData.status)) {
+      errors.push({
+        field: 'status',
+        message: 'Invalid status. Must be draft, published, or scheduled',
+      });
+    }
+
+    if (pageData.status === 'scheduled' && !pageData.published_at) {
+      errors.push({
+        field: 'published_at',
+        message: 'published_at is required when status is scheduled',
+      });
+    }
+
+    if (pageData.published_at) {
+      const publishDate = new Date(pageData.published_at);
+      if (isNaN(publishDate.getTime())) {
+        errors.push({ field: 'published_at', message: 'Invalid date format' });
+      } else if (pageData.status === 'scheduled' && publishDate <= new Date()) {
+        errors.push({ field: 'published_at', message: 'Scheduled date must be in the future' });
+      }
+    }
+
+    if (errors.length > 0) {
+      throw new ValidationError('Page validation failed', errors);
+    }
+  },
+
+  validateNewsletterData(newsletterData) {
+    const errors = [];
+
+    if (!newsletterData.name || newsletterData.name.trim().length === 0) {
+      errors.push({ field: 'name', message: 'Newsletter name is required' });
+    }
+
+    if (errors.length > 0) {
+      throw new ValidationError('Newsletter validation failed', errors);
     }
   },
 };
@@ -336,6 +411,249 @@ export async function getPosts(options = {}) {
   }
 }
 
+export async function searchPosts(query, options = {}) {
+  // Validate query
+  if (!query || query.trim().length === 0) {
+    throw new ValidationError('Search query is required');
+  }
+
+  // Sanitize query - escape special NQL characters to prevent injection
+  const sanitizedQuery = query.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+  // Build filter with fuzzy title match using Ghost NQL
+  const filterParts = [`title:~'${sanitizedQuery}'`];
+
+  // Add status filter if provided and not 'all'
+  if (options.status && options.status !== 'all') {
+    filterParts.push(`status:${options.status}`);
+  }
+
+  const searchOptions = {
+    limit: options.limit || 15,
+    include: 'tags,authors',
+    filter: filterParts.join('+'),
+  };
+
+  try {
+    return await handleApiRequest('posts', 'browse', {}, searchOptions);
+  } catch (error) {
+    console.error('Failed to search posts:', error);
+    throw error;
+  }
+}
+
+/**
+ * Page CRUD Operations
+ * Pages are similar to posts but do NOT support tags
+ */
+
+export async function createPage(pageData, options = { source: 'html' }) {
+  // Validate input
+  validators.validatePageData(pageData);
+
+  // Add defaults
+  const dataWithDefaults = {
+    status: 'draft',
+    ...pageData,
+  };
+
+  // Sanitize HTML content if provided (use same sanitization as posts)
+  if (dataWithDefaults.html) {
+    dataWithDefaults.html = sanitizeHtml(dataWithDefaults.html, {
+      allowedTags: [
+        'h1',
+        'h2',
+        'h3',
+        'h4',
+        'h5',
+        'h6',
+        'blockquote',
+        'p',
+        'a',
+        'ul',
+        'ol',
+        'nl',
+        'li',
+        'b',
+        'i',
+        'strong',
+        'em',
+        'strike',
+        'code',
+        'hr',
+        'br',
+        'div',
+        'span',
+        'img',
+        'pre',
+      ],
+      allowedAttributes: {
+        a: ['href', 'title'],
+        img: ['src', 'alt', 'title', 'width', 'height'],
+        '*': ['class', 'id'],
+      },
+      allowedSchemes: ['http', 'https', 'mailto'],
+      allowedSchemesByTag: {
+        img: ['http', 'https', 'data'],
+      },
+    });
+  }
+
+  try {
+    return await handleApiRequest('pages', 'add', dataWithDefaults, options);
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 422) {
+      throw new ValidationError('Page creation failed due to validation errors', [
+        { field: 'page', message: error.originalError },
+      ]);
+    }
+    throw error;
+  }
+}
+
+export async function updatePage(pageId, updateData, options = {}) {
+  if (!pageId) {
+    throw new ValidationError('Page ID is required for update');
+  }
+
+  // Sanitize HTML if being updated
+  if (updateData.html) {
+    updateData.html = sanitizeHtml(updateData.html, {
+      allowedTags: [
+        'h1',
+        'h2',
+        'h3',
+        'h4',
+        'h5',
+        'h6',
+        'blockquote',
+        'p',
+        'a',
+        'ul',
+        'ol',
+        'nl',
+        'li',
+        'b',
+        'i',
+        'strong',
+        'em',
+        'strike',
+        'code',
+        'hr',
+        'br',
+        'div',
+        'span',
+        'img',
+        'pre',
+      ],
+      allowedAttributes: {
+        a: ['href', 'title'],
+        img: ['src', 'alt', 'title', 'width', 'height'],
+        '*': ['class', 'id'],
+      },
+      allowedSchemes: ['http', 'https', 'mailto'],
+      allowedSchemesByTag: {
+        img: ['http', 'https', 'data'],
+      },
+    });
+  }
+
+  try {
+    // Get existing page to retrieve updated_at for conflict resolution
+    const existingPage = await handleApiRequest('pages', 'read', { id: pageId });
+
+    // Merge existing data with updates, preserving updated_at
+    const mergedData = {
+      ...existingPage,
+      ...updateData,
+      updated_at: existingPage.updated_at,
+    };
+
+    return await handleApiRequest('pages', 'edit', mergedData, { id: pageId, ...options });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Page', pageId);
+    }
+    throw error;
+  }
+}
+
+export async function deletePage(pageId) {
+  if (!pageId) {
+    throw new ValidationError('Page ID is required for delete');
+  }
+
+  try {
+    return await handleApiRequest('pages', 'delete', { id: pageId });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Page', pageId);
+    }
+    throw error;
+  }
+}
+
+export async function getPage(pageId, options = {}) {
+  if (!pageId) {
+    throw new ValidationError('Page ID is required');
+  }
+
+  try {
+    return await handleApiRequest('pages', 'read', { id: pageId }, options);
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Page', pageId);
+    }
+    throw error;
+  }
+}
+
+export async function getPages(options = {}) {
+  const defaultOptions = {
+    limit: 15,
+    include: 'authors',
+    ...options,
+  };
+
+  try {
+    return await handleApiRequest('pages', 'browse', {}, defaultOptions);
+  } catch (error) {
+    console.error('Failed to get pages:', error);
+    throw error;
+  }
+}
+
+export async function searchPages(query, options = {}) {
+  // Validate query
+  if (!query || query.trim().length === 0) {
+    throw new ValidationError('Search query is required');
+  }
+
+  // Sanitize query - escape special NQL characters to prevent injection
+  const sanitizedQuery = query.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+  // Build filter with fuzzy title match using Ghost NQL
+  const filterParts = [`title:~'${sanitizedQuery}'`];
+
+  // Add status filter if provided and not 'all'
+  if (options.status && options.status !== 'all') {
+    filterParts.push(`status:${options.status}`);
+  }
+
+  const searchOptions = {
+    limit: options.limit || 15,
+    include: 'authors',
+    filter: filterParts.join('+'),
+  };
+
+  try {
+    return await handleApiRequest('pages', 'browse', {}, searchOptions);
+  } catch (error) {
+    console.error('Failed to search pages:', error);
+    throw error;
+  }
+}
+
 export async function uploadImage(imagePath) {
   // Validate input
   await validators.validateImagePath(imagePath);
@@ -370,8 +688,8 @@ export async function createTag(tagData) {
     if (error instanceof GhostAPIError && error.ghostStatusCode === 422) {
       // Check if it's a duplicate tag error
       if (error.originalError.includes('already exists')) {
-        // Try to fetch the existing tag
-        const existingTags = await getTags(tagData.name);
+        // Try to fetch the existing tag by name filter
+        const existingTags = await getTags({ filter: `name:'${tagData.name}'` });
         if (existingTags.length > 0) {
           return existingTags[0]; // Return existing tag instead of failing
         }
@@ -384,28 +702,31 @@ export async function createTag(tagData) {
   }
 }
 
-export async function getTags(name) {
-  const options = {
-    limit: 'all',
-    ...(name && { filter: `name:'${name}'` }),
-  };
-
+export async function getTags(options = {}) {
   try {
-    const tags = await handleApiRequest('tags', 'browse', {}, options);
+    const tags = await handleApiRequest(
+      'tags',
+      'browse',
+      {},
+      {
+        limit: 15,
+        ...options,
+      }
+    );
     return tags || [];
   } catch (error) {
-    console.error('Failed to get tags:', error);
+    logger.error('Failed to get tags', { error: error.message });
     throw error;
   }
 }
 
-export async function getTag(tagId) {
+export async function getTag(tagId, options = {}) {
   if (!tagId) {
     throw new ValidationError('Tag ID is required');
   }
 
   try {
-    return await handleApiRequest('tags', 'read', { id: tagId });
+    return await handleApiRequest('tags', 'read', { id: tagId }, options);
   } catch (error) {
     if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
       throw new NotFoundError('Tag', tagId);
@@ -419,7 +740,7 @@ export async function updateTag(tagId, updateData) {
     throw new ValidationError('Tag ID is required for update');
   }
 
-  validators.validateTagData({ name: 'dummy', ...updateData }); // Validate update data
+  validators.validateTagUpdateData(updateData); // Validate update data
 
   try {
     const existingTag = await getTag(tagId);
@@ -452,6 +773,820 @@ export async function deleteTag(tagId) {
   } catch (error) {
     if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
       throw new NotFoundError('Tag', tagId);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Member CRUD Operations
+ * Members represent subscribers/users in Ghost CMS
+ */
+
+/**
+ * Creates a new member (subscriber) in Ghost CMS
+ * @param {Object} memberData - The member data
+ * @param {string} memberData.email - Member email (required)
+ * @param {string} [memberData.name] - Member name
+ * @param {string} [memberData.note] - Notes about the member (HTML will be sanitized)
+ * @param {string[]} [memberData.labels] - Array of label names
+ * @param {Object[]} [memberData.newsletters] - Array of newsletter objects with id
+ * @param {boolean} [memberData.subscribed] - Email subscription status
+ * @param {Object} [options] - Additional options for the API request
+ * @returns {Promise<Object>} The created member object
+ * @throws {ValidationError} If validation fails
+ * @throws {GhostAPIError} If the API request fails
+ */
+export async function createMember(memberData, options = {}) {
+  // Input validation is performed at the MCP tool layer using Zod schemas
+  try {
+    return await handleApiRequest('members', 'add', memberData, options);
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 422) {
+      throw new ValidationError('Member creation failed due to validation errors', [
+        { field: 'member', message: error.originalError },
+      ]);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Updates an existing member in Ghost CMS
+ * @param {string} memberId - The member ID to update
+ * @param {Object} updateData - The member update data
+ * @param {string} [updateData.email] - Member email
+ * @param {string} [updateData.name] - Member name
+ * @param {string} [updateData.note] - Notes about the member (HTML will be sanitized)
+ * @param {string[]} [updateData.labels] - Array of label names
+ * @param {Object[]} [updateData.newsletters] - Array of newsletter objects with id
+ * @param {boolean} [updateData.subscribed] - Email subscription status
+ * @param {Object} [options] - Additional options for the API request
+ * @returns {Promise<Object>} The updated member object
+ * @throws {ValidationError} If validation fails
+ * @throws {NotFoundError} If the member is not found
+ * @throws {GhostAPIError} If the API request fails
+ */
+export async function updateMember(memberId, updateData, options = {}) {
+  // Input validation is performed at the MCP tool layer using Zod schemas
+  if (!memberId) {
+    throw new ValidationError('Member ID is required for update');
+  }
+
+  try {
+    // Get existing member to retrieve updated_at for conflict resolution
+    const existingMember = await handleApiRequest('members', 'read', { id: memberId });
+
+    // Merge existing data with updates, preserving updated_at
+    const mergedData = {
+      ...existingMember,
+      ...updateData,
+      updated_at: existingMember.updated_at,
+    };
+
+    return await handleApiRequest('members', 'edit', mergedData, { id: memberId, ...options });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Member', memberId);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Deletes a member from Ghost CMS
+ * @param {string} memberId - The member ID to delete
+ * @returns {Promise<Object>} Deletion confirmation object
+ * @throws {ValidationError} If member ID is not provided
+ * @throws {NotFoundError} If the member is not found
+ * @throws {GhostAPIError} If the API request fails
+ */
+export async function deleteMember(memberId) {
+  if (!memberId) {
+    throw new ValidationError('Member ID is required for deletion');
+  }
+
+  try {
+    return await handleApiRequest('members', 'delete', { id: memberId });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Member', memberId);
+    }
+    throw error;
+  }
+}
+
+/**
+ * List members from Ghost CMS with optional filtering and pagination
+ * @param {Object} [options] - Query options
+ * @param {number} [options.limit] - Number of members to return (1-100)
+ * @param {number} [options.page] - Page number (1+)
+ * @param {string} [options.filter] - NQL filter string (e.g., 'status:paid')
+ * @param {string} [options.order] - Order string (e.g., 'created_at desc')
+ * @param {string} [options.include] - Include string (e.g., 'labels,newsletters')
+ * @returns {Promise<Array>} Array of member objects
+ * @throws {ValidationError} If validation fails
+ * @throws {GhostAPIError} If the API request fails
+ */
+export async function getMembers(options = {}) {
+  // Input validation is performed at the MCP tool layer using Zod schemas
+  const defaultOptions = {
+    limit: 15,
+    ...options,
+  };
+
+  try {
+    const members = await handleApiRequest('members', 'browse', {}, defaultOptions);
+    return members || [];
+  } catch (error) {
+    console.error('Failed to get members:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get a single member from Ghost CMS by ID or email
+ * @param {Object} params - Lookup parameters (id OR email required)
+ * @param {string} [params.id] - Member ID
+ * @param {string} [params.email] - Member email
+ * @returns {Promise<Object>} The member object
+ * @throws {ValidationError} If validation fails
+ * @throws {NotFoundError} If the member is not found
+ * @throws {GhostAPIError} If the API request fails
+ */
+export async function getMember(params) {
+  // Input validation is performed at the MCP tool layer using Zod schemas
+  const { sanitizeNqlValue } = await import('./memberService.js');
+  const { id, email } = params;
+
+  try {
+    if (id) {
+      // Lookup by ID using read endpoint
+      return await handleApiRequest('members', 'read', { id }, { id });
+    } else {
+      // Lookup by email using browse with filter
+      const sanitizedEmail = sanitizeNqlValue(email);
+      const members = await handleApiRequest(
+        'members',
+        'browse',
+        {},
+        { filter: `email:'${sanitizedEmail}'`, limit: 1 }
+      );
+
+      if (!members || members.length === 0) {
+        throw new NotFoundError('Member', email);
+      }
+
+      return members[0];
+    }
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Member', id || email);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Search members by name or email
+ * @param {string} query - Search query (searches name and email fields)
+ * @param {Object} [options] - Additional options
+ * @param {number} [options.limit] - Maximum number of results (default: 15)
+ * @returns {Promise<Array>} Array of matching member objects
+ * @throws {ValidationError} If validation fails
+ * @throws {GhostAPIError} If the API request fails
+ */
+export async function searchMembers(query, options = {}) {
+  // Input validation is performed at the MCP tool layer using Zod schemas
+  const { sanitizeNqlValue } = await import('./memberService.js');
+  const sanitizedQuery = sanitizeNqlValue(query.trim());
+
+  const limit = options.limit || 15;
+
+  // Build NQL filter for name or email containing the query
+  // Ghost uses ~ for contains/like matching
+  const filter = `name:~'${sanitizedQuery}',email:~'${sanitizedQuery}'`;
+
+  try {
+    const members = await handleApiRequest('members', 'browse', {}, { filter, limit });
+    return members || [];
+  } catch (error) {
+    console.error('Failed to search members:', error);
+    throw error;
+  }
+}
+
+/**
+ * Newsletter CRUD Operations
+ */
+
+export async function getNewsletters(options = {}) {
+  const defaultOptions = {
+    limit: 'all',
+    ...options,
+  };
+
+  try {
+    const newsletters = await handleApiRequest('newsletters', 'browse', {}, defaultOptions);
+    return newsletters || [];
+  } catch (error) {
+    console.error('Failed to get newsletters:', error);
+    throw error;
+  }
+}
+
+export async function getNewsletter(newsletterId) {
+  if (!newsletterId) {
+    throw new ValidationError('Newsletter ID is required');
+  }
+
+  try {
+    return await handleApiRequest('newsletters', 'read', { id: newsletterId });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Newsletter', newsletterId);
+    }
+    throw error;
+  }
+}
+
+export async function createNewsletter(newsletterData) {
+  // Validate input
+  validators.validateNewsletterData(newsletterData);
+
+  try {
+    return await handleApiRequest('newsletters', 'add', newsletterData);
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 422) {
+      throw new ValidationError('Newsletter creation failed', [
+        { field: 'newsletter', message: error.originalError },
+      ]);
+    }
+    throw error;
+  }
+}
+
+export async function updateNewsletter(newsletterId, updateData) {
+  if (!newsletterId) {
+    throw new ValidationError('Newsletter ID is required for update');
+  }
+
+  try {
+    // Get existing newsletter to retrieve updated_at for conflict resolution
+    const existingNewsletter = await handleApiRequest('newsletters', 'read', {
+      id: newsletterId,
+    });
+
+    // Merge existing data with updates, preserving updated_at
+    const mergedData = {
+      ...existingNewsletter,
+      ...updateData,
+      updated_at: existingNewsletter.updated_at,
+    };
+
+    return await handleApiRequest('newsletters', 'edit', mergedData, { id: newsletterId });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Newsletter', newsletterId);
+    }
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 422) {
+      throw new ValidationError('Newsletter update failed', [
+        { field: 'newsletter', message: error.originalError },
+      ]);
+    }
+    throw error;
+  }
+}
+
+export async function deleteNewsletter(newsletterId) {
+  if (!newsletterId) {
+    throw new ValidationError('Newsletter ID is required for deletion');
+  }
+
+  try {
+    return await handleApiRequest('newsletters', 'delete', newsletterId);
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Newsletter', newsletterId);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Create a new tier (membership level)
+ * @param {Object} tierData - Tier data
+ * @param {Object} [options={}] - Options for the API request
+ * @returns {Promise<Object>} Created tier
+ */
+export async function createTier(tierData, options = {}) {
+  const { validateTierData } = await import('./tierService.js');
+  validateTierData(tierData);
+
+  try {
+    return await handleApiRequest('tiers', 'add', tierData, options);
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 422) {
+      throw new ValidationError('Tier creation failed due to validation errors', [
+        { field: 'tier', message: error.originalError },
+      ]);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Update an existing tier
+ * @param {string} id - Tier ID
+ * @param {Object} updateData - Tier update data
+ * @param {Object} [options={}] - Options for the API request
+ * @returns {Promise<Object>} Updated tier
+ */
+export async function updateTier(id, updateData, options = {}) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('Tier ID is required for update');
+  }
+
+  const { validateTierUpdateData } = await import('./tierService.js');
+  validateTierUpdateData(updateData);
+
+  try {
+    // Get existing tier for merge
+    const existingTier = await handleApiRequest('tiers', 'read', { id }, { id });
+
+    // Merge updates with existing data
+    const mergedData = {
+      ...existingTier,
+      ...updateData,
+      updated_at: existingTier.updated_at,
+    };
+
+    return await handleApiRequest('tiers', 'edit', mergedData, { id, ...options });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Tier', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Delete a tier
+ * @param {string} id - Tier ID
+ * @returns {Promise<Object>} Deletion result
+ */
+export async function deleteTier(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('Tier ID is required for deletion');
+  }
+
+  try {
+    return await handleApiRequest('tiers', 'delete', { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Tier', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Get all tiers with optional filtering
+ * @param {Object} [options={}] - Query options
+ * @param {number} [options.limit] - Number of tiers to return (1-100, default 15)
+ * @param {number} [options.page] - Page number
+ * @param {string} [options.filter] - NQL filter string (e.g., "type:paid", "type:free")
+ * @param {string} [options.order] - Order string
+ * @param {string} [options.include] - Include string
+ * @returns {Promise<Array>} Array of tiers
+ */
+export async function getTiers(options = {}) {
+  const { validateTierQueryOptions } = await import('./tierService.js');
+  validateTierQueryOptions(options);
+
+  const defaultOptions = {
+    limit: 15,
+    ...options,
+  };
+
+  try {
+    const tiers = await handleApiRequest('tiers', 'browse', {}, defaultOptions);
+    return tiers || [];
+  } catch (error) {
+    console.error('Failed to get tiers:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get a single tier by ID
+ * @param {string} id - Tier ID
+ * @returns {Promise<Object>} Tier object
+ */
+export async function getTier(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('Tier ID is required and must be a non-empty string');
+  }
+
+  try {
+    return await handleApiRequest('tiers', 'read', { id }, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Tier', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Get all offers with pagination and filtering
+ * Offers are promotional discounts/trials for membership tiers
+ * @param {Object} options - Query options
+ * @param {number} options.limit - Number of offers to return
+ * @param {number} options.page - Page number
+ * @param {string} options.filter - NQL filter string
+ * @param {string} options.order - Sort order
+ * @returns {Promise<Object>} Offers response with meta
+ */
+export async function getOffers(options = {}) {
+  const { limit = 15, page = 1, filter, order } = options;
+  const params = { limit, page };
+
+  if (filter) params.filter = filter;
+  if (order) params.order = order;
+
+  // handleApiRequest expects browse calls as (resource, action, {}, options)
+  return await handleApiRequest('offers', 'browse', {}, params);
+}
+
+/**
+ * Get a single offer by ID
+ * @param {string} id - Offer ID
+ * @returns {Promise<Object>} Offer object
+ */
+export async function getOffer(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('Offer ID is required and must be a non-empty string');
+  }
+
+  try {
+    return await handleApiRequest('offers', 'read', { id }, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Offer', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Create a new offer
+ * @param {Object} offerData - Offer data
+ * @param {string} offerData.name - Offer name
+ * @param {string} offerData.code - Unique offer code for redemption
+ * @param {string} offerData.type - Offer type (percent, fixed, trial)
+ * @param {string} offerData.cadence - Billing cadence (month, year)
+ * @param {number} offerData.amount - Discount amount
+ * @param {string} offerData.duration - Duration type (once, repeating, forever, trial)
+ * @param {string} offerData.tier_id - Tier ID to apply offer to
+ * @returns {Promise<Object>} Created offer object
+ */
+export async function createOffer(offerData) {
+  if (!offerData || typeof offerData !== 'object') {
+    throw new ValidationError('Offer data is required and must be an object');
+  }
+
+  const requiredFields = ['name', 'code', 'type', 'cadence', 'amount', 'duration', 'tier_id'];
+  for (const field of requiredFields) {
+    if (!offerData[field]) {
+      throw new ValidationError(`Offer ${field} is required`);
+    }
+  }
+
+  return await handleApiRequest('offers', 'add', { offers: [offerData] });
+}
+
+/**
+ * Update an existing offer
+ * Note: Only display fields can be updated (name, display_title, display_description, code)
+ * @param {string} id - Offer ID
+ * @param {Object} offerData - Offer data to update
+ * @returns {Promise<Object>} Updated offer object
+ */
+export async function updateOffer(id, offerData) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('Offer ID is required and must be a non-empty string');
+  }
+
+  if (!offerData || typeof offerData !== 'object') {
+    throw new ValidationError('Offer data is required and must be an object');
+  }
+
+  try {
+    return await handleApiRequest('offers', 'edit', { id, offers: [offerData] }, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Offer', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Delete an offer by ID
+ * @param {string} id - Offer ID
+ * @returns {Promise<void>}
+ */
+export async function deleteOffer(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('Offer ID is required and must be a non-empty string');
+  }
+
+  try {
+    return await handleApiRequest('offers', 'delete', {}, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Offer', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Get all pending invites
+ * Invites are sent to prospective Ghost staff members
+ * @param {Object} options - Query options
+ * @param {number} options.limit - Number of invites to return (default: 15)
+ * @param {number} options.page - Page number (default: 1)
+ * @param {string} options.filter - NQL filter string
+ * @param {string} options.order - Sort order (e.g., "created_at desc")
+ * @returns {Promise<Array>} Array of invite objects
+ */
+export async function getInvites(options = {}) {
+  const { limit = 15, page = 1, filter, order } = options;
+
+  const queryOptions = { limit, page };
+  if (filter) queryOptions.filter = filter;
+  if (order) queryOptions.order = order;
+
+  // handleApiRequest expects browse calls as (resource, action, {}, options)
+  return await handleApiRequest('invites', 'browse', {}, queryOptions);
+}
+
+/**
+ * Create a new staff invitation
+ * Sends an invite email to join Ghost as a staff member
+ * @param {Object} inviteData - Invitation data
+ * @param {string} inviteData.role_id - ID of the role to assign (e.g., Author, Editor, Administrator)
+ * @param {string} inviteData.email - Email address of the invitee
+ * @param {string} [inviteData.expires_at] - Optional expiry datetime (ISO 8601)
+ * @returns {Promise<Object>} Created invite object
+ */
+export async function createInvite(inviteData) {
+  if (!inviteData || typeof inviteData !== 'object') {
+    throw new ValidationError('Invite data must be a valid object');
+  }
+
+  const result = await handleApiRequest('invites', 'add', {
+    invites: [inviteData],
+  });
+
+  return result.invites?.[0] || result;
+}
+
+/**
+ * Delete (revoke) a pending invitation
+ * Removes an invite before it has been accepted
+ * @param {string} id - Invite ID
+ * @returns {Promise<Object>} Deletion result
+ */
+export async function deleteInvite(id) {
+  if (!id || typeof id !== 'string') {
+    throw new ValidationError('Invite ID is required and must be a string');
+  }
+
+  try {
+    return await handleApiRequest('invites', 'delete', { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError(`Invite with ID ${id} not found`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Create a new webhook
+ * Webhooks notify external services of Ghost events
+ * @param {Object} webhookData - Webhook configuration
+ * @param {string} webhookData.event - Event type (e.g., 'post.published', 'member.added')
+ * @param {string} webhookData.target_url - URL to receive webhook POST requests
+ * @param {string} [webhookData.name] - Optional webhook name
+ * @param {string} [webhookData.secret] - Optional secret for signature verification
+ * @param {string} [webhookData.api_version] - Optional Ghost API version
+ * @param {string} [webhookData.integration_id] - Optional integration ID
+ * @returns {Promise<Object>} Created webhook object
+ */
+export async function createWebhook(webhookData) {
+  if (!webhookData || typeof webhookData !== 'object') {
+    throw new ValidationError('Webhook data must be a valid object');
+  }
+
+  const result = await handleApiRequest('webhooks', 'add', {
+    webhooks: [webhookData],
+  });
+
+  return result.webhooks?.[0] || result;
+}
+
+/**
+ * Update an existing webhook
+ * @param {string} id - Webhook ID
+ * @param {Object} webhookData - Webhook fields to update
+ * @param {string} [webhookData.event] - Event type
+ * @param {string} [webhookData.target_url] - Target URL
+ * @param {string} [webhookData.name] - Webhook name
+ * @param {string} [webhookData.api_version] - API version
+ * @returns {Promise<Object>} Updated webhook object
+ */
+export async function updateWebhook(id, webhookData) {
+  if (!id || typeof id !== 'string') {
+    throw new ValidationError('Webhook ID is required and must be a string');
+  }
+
+  if (!webhookData || typeof webhookData !== 'object') {
+    throw new ValidationError('Webhook data must be a valid object');
+  }
+
+  try {
+    const result = await handleApiRequest('webhooks', 'edit', {
+      id,
+      webhooks: [webhookData],
+    });
+
+    return result.webhooks?.[0] || result;
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Webhook', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Delete a webhook
+ * @param {string} id - Webhook ID
+ * @returns {Promise<Object>} Deletion result
+ */
+export async function deleteWebhook(id) {
+  if (!id || typeof id !== 'string') {
+    throw new ValidationError('Webhook ID is required and must be a string');
+  }
+
+  try {
+    return await handleApiRequest('webhooks', 'delete', { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Webhook', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Get all users (staff members)
+ * Users represent Ghost staff (authors, editors, administrators)
+ * @param {Object} options - Query options
+ * @param {number} options.limit - Number of users to return (default: 15)
+ * @param {number} options.page - Page number (default: 1)
+ * @param {string} options.filter - NQL filter string
+ * @param {string} options.order - Sort order (e.g., "name asc")
+ * @param {string} options.include - Related data to include (roles, count.posts)
+ * @returns {Promise<Array>} Array of user objects
+ */
+export async function getUsers(options = {}) {
+  const { limit = 15, page = 1, filter, order, include } = options;
+
+  const queryOptions = { limit, page };
+  if (filter) queryOptions.filter = filter;
+  if (order) queryOptions.order = order;
+  if (include) queryOptions.include = include;
+
+  // handleApiRequest expects browse calls as (resource, action, {}, options)
+  return await handleApiRequest('users', 'browse', {}, queryOptions);
+}
+
+/**
+ * Get a single user by ID
+ * @param {string} id - User ID (24-character hex string)
+ * @returns {Promise<Object>} User object
+ * @throws {ValidationError} If ID is invalid
+ * @throws {NotFoundError} If user not found
+ */
+export async function getUser(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('User ID is required and must be a non-empty string');
+  }
+
+  try {
+    return await handleApiRequest('users', 'read', {}, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('User', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Update a user's profile
+ * @param {string} id - User ID
+ * @param {Object} userData - User data to update
+ * @param {string} userData.name - User's display name
+ * @param {string} userData.email - User's email address
+ * @param {string} userData.bio - User biography
+ * @param {string} userData.location - User location
+ * @param {string} userData.website - User website URL
+ * @param {string} userData.facebook - Facebook username
+ * @param {string} userData.twitter - Twitter handle
+ * @param {string} userData.profile_image - Profile image URL
+ * @param {string} userData.cover_image - Cover image URL
+ * @returns {Promise<Object>} Updated user object
+ * @throws {ValidationError} If required fields are missing
+ * @throws {NotFoundError} If user not found
+ */
+export async function updateUser(id, userData) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('User ID is required and must be a non-empty string');
+  }
+
+  if (!userData || typeof userData !== 'object' || Object.keys(userData).length === 0) {
+    throw new ValidationError('User data is required for update');
+  }
+
+  try {
+    return await handleApiRequest('users', 'edit', userData, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('User', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Delete a user (staff member)
+ * Note: Cannot delete the currently authenticated user (self-delete protection)
+ * @param {string} id - User ID to delete
+ * @returns {Promise<Object>} Deletion confirmation
+ * @throws {ValidationError} If ID is invalid
+ * @throws {NotFoundError} If user not found
+ */
+export async function deleteUser(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('User ID is required and must be a non-empty string');
+  }
+
+  try {
+    return await handleApiRequest('users', 'delete', {}, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('User', id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Get all roles (read-only in Ghost)
+ * Roles define permission levels for staff users
+ * @param {Object} options - Query options
+ * @param {number} options.limit - Number of roles to return
+ * @param {number} options.page - Page number
+ * @returns {Promise<Object>} Roles response with meta
+ */
+export async function getRoles(options = {}) {
+  const { limit = 15, page = 1 } = options;
+
+  // handleApiRequest expects browse calls as (resource, action, {}, options)
+  return await handleApiRequest('roles', 'browse', {}, { limit, page });
+}
+
+/**
+ * Get a single role by ID (read-only in Ghost)
+ * @param {string} id - Role ID
+ * @returns {Promise<Object>} Role object
+ */
+export async function getRole(id) {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new ValidationError('Role ID is required and must be a non-empty string');
+  }
+
+  try {
+    return await handleApiRequest('roles', 'read', { id }, { id });
+  } catch (error) {
+    if (error instanceof GhostAPIError && error.ghostStatusCode === 404) {
+      throw new NotFoundError('Role', id);
     }
     throw error;
   }
@@ -495,11 +1630,51 @@ export default {
   deletePost,
   getPost,
   getPosts,
+  searchPosts,
+  createPage,
+  updatePage,
+  deletePage,
+  getPage,
+  getPages,
+  searchPages,
   uploadImage,
   createTag,
   getTags,
   getTag,
   updateTag,
   deleteTag,
+  createMember,
+  updateMember,
+  deleteMember,
+  getMembers,
+  getMember,
+  searchMembers,
+  getNewsletters,
+  getNewsletter,
+  createNewsletter,
+  updateNewsletter,
+  deleteNewsletter,
+  createTier,
+  updateTier,
+  deleteTier,
+  getTiers,
+  getTier,
+  getOffers,
+  getOffer,
+  createOffer,
+  updateOffer,
+  deleteOffer,
+  getInvites,
+  createInvite,
+  deleteInvite,
+  createWebhook,
+  updateWebhook,
+  deleteWebhook,
+  getUsers,
+  getUser,
+  updateUser,
+  deleteUser,
+  getRoles,
+  getRole,
   checkHealth,
 };

@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z } from 'zod';
 import dotenv from 'dotenv';
+import express from 'express';
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
@@ -11,6 +13,13 @@ import crypto from 'crypto';
 import { ValidationError } from './errors/index.js';
 import { validateToolInput } from './utils/validation.js';
 import { trackTempFile, cleanupTempFiles } from './utils/tempFileManager.js';
+import { mcpConfig } from './config/mcp-config.js';
+import {
+  apiKeyAuth,
+  expressErrorHandler,
+  healthCheck,
+  mcpCors,
+} from './middleware/errorMiddleware.js';
 import {
   createTagSchema,
   updateTagSchema,
@@ -32,6 +41,23 @@ import {
   createPageSchema,
   updatePageSchema,
   pageQuerySchema,
+  offerQuerySchema,
+  offerIdSchema,
+  createOfferSchema,
+  updateOfferSchema,
+  deleteOfferSchema,
+  inviteQuerySchema,
+  createInviteSchema,
+  deleteInviteSchema,
+  roleQuerySchema,
+  roleIdSchema,
+  createWebhookSchema,
+  updateWebhookSchema,
+  deleteWebhookSchema,
+  userQuerySchema,
+  userIdSchema,
+  updateUserSchema,
+  deleteUserSchema,
 } from './schemas/index.js';
 
 // Load environment variables
@@ -88,6 +114,9 @@ const server = new McpServer({
   name: 'ghost-mcp-server',
   version: '1.0.0',
 });
+
+const sseTransports = new Map();
+const SSE_MESSAGES_ENDPOINT = '/mcp/messages';
 
 // --- Register Tools ---
 
@@ -1808,24 +1837,916 @@ server.registerTool(
   }
 );
 
+// --- Offer Management Tools ---
+
+// Get Offers Tool
+server.registerTool(
+  'ghost_get_offers',
+  {
+    description:
+      'Retrieves a list of promotional offers in Ghost CMS. Offers provide discounts or trials for membership tiers.',
+    inputSchema: offerQuerySchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(offerQuerySchema, rawInput, 'ghost_get_offers');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const input = validation.data;
+
+    console.error(`Executing tool: ghost_get_offers`);
+    try {
+      await loadServices();
+
+      const response = await ghostService.getOffers(input);
+      console.error(`Retrieved ${response.offers?.length || 0} offers`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(response, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_get_offers:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'Offer query');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error getting offers: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Get Offer Tool
+server.registerTool(
+  'ghost_get_offer',
+  {
+    description: 'Retrieves details of a specific promotional offer by ID in Ghost CMS.',
+    inputSchema: offerIdSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(offerIdSchema, rawInput, 'ghost_get_offer');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const { id } = validation.data;
+
+    console.error(`Executing tool: ghost_get_offer for offer ID: ${id}`);
+    try {
+      await loadServices();
+
+      const offer = await ghostService.getOffer(id);
+      console.error(`Retrieved offer: ${offer.name}`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(offer, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_get_offer:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'Offer retrieval');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error getting offer: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Create Offer Tool
+server.registerTool(
+  'ghost_create_offer',
+  {
+    description:
+      'Creates a new promotional offer in Ghost CMS with discount/trial details and redemption code.',
+    inputSchema: createOfferSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(createOfferSchema, rawInput, 'ghost_create_offer');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const input = validation.data;
+
+    console.error(`Executing tool: ghost_create_offer`);
+    try {
+      await loadServices();
+
+      const offer = await ghostService.createOffer(input);
+      console.error(`Offer created successfully. Offer ID: ${offer.id}, Code: ${offer.code}`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(offer, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_create_offer:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'Offer creation');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error creating offer: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Update Offer Tool
+server.registerTool(
+  'ghost_update_offer',
+  {
+    description:
+      'Updates an existing promotional offer in Ghost CMS. Only display fields can be modified (name, display_title, display_description, code).',
+    inputSchema: updateOfferSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(updateOfferSchema, rawInput, 'ghost_update_offer');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const { id, ...updateData } = validation.data;
+
+    console.error(`Executing tool: ghost_update_offer for offer ID: ${id}`);
+    try {
+      await loadServices();
+
+      const offer = await ghostService.updateOffer(id, updateData);
+      console.error(`Offer updated successfully. Offer ID: ${offer.id}`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(offer, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_update_offer:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'Offer update');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error updating offer: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Delete Offer Tool
+server.registerTool(
+  'ghost_delete_offer',
+  {
+    description:
+      'Deletes a promotional offer from Ghost CMS by ID. This operation is permanent and cannot be undone.',
+    inputSchema: deleteOfferSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(deleteOfferSchema, rawInput, 'ghost_delete_offer');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const { id } = validation.data;
+
+    console.error(`Executing tool: ghost_delete_offer for offer ID: ${id}`);
+    try {
+      await loadServices();
+
+      await ghostService.deleteOffer(id);
+      console.error(`Offer deleted successfully. Offer ID: ${id}`);
+
+      return {
+        content: [{ type: 'text', text: `Offer ${id} has been successfully deleted.` }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_delete_offer:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'Offer deletion');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error deleting offer: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// --- Invite Management Tools (Staff Invitations) ---
+
+// Get Invites Tool
+server.registerTool(
+  'ghost_get_invites',
+  {
+    description:
+      'Retrieves pending staff invitations in Ghost CMS. Invites are sent to prospective staff members to join as authors, editors, or administrators. Supports pagination and filtering.',
+    inputSchema: inviteQuerySchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(inviteQuerySchema, rawInput, 'ghost_get_invites');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+
+    try {
+      console.error(`Executing tool: ghost_get_invites`);
+      await loadServices();
+      const invites = await ghostService.getInvites(validation.data);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(invites, null, 2) }],
+        structuredContent: { invites },
+      };
+    } catch (error) {
+      console.error(`Error in ghost_get_invites:`, error);
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: `Failed to retrieve invites: ${error.message}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Create Invite Tool
+server.registerTool(
+  'ghost_create_invite',
+  {
+    description:
+      'Creates a new staff invitation in Ghost CMS. Sends an invite email to a prospective staff member. Requires role_id (use ghost_get_roles to find role IDs) and email address.',
+    inputSchema: createInviteSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(createInviteSchema, rawInput, 'ghost_create_invite');
+    if (!validation.success) {
+      return validation.error;
+    }
+
+    try {
+      console.error(`Executing tool: ghost_create_invite`);
+      await loadServices();
+      const invite = await ghostService.createInvite(validation.data);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(invite, null, 2) }],
+        structuredContent: { invite },
+      };
+    } catch (error) {
+      console.error(`Error in ghost_create_invite:`, error);
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: `Failed to create invite: ${error.message}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Delete Invite Tool
+server.registerTool(
+  'ghost_delete_invite',
+  {
+    description:
+      'Deletes (revokes) a pending staff invitation in Ghost CMS. This permanently removes an invitation before it has been accepted. Requires invite ID.',
+    inputSchema: deleteInviteSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(deleteInviteSchema, rawInput, 'ghost_delete_invite');
+    if (!validation.success) {
+      return validation.error;
+    }
+
+    try {
+      console.error(`Executing tool: ghost_delete_invite`);
+      await loadServices();
+      await ghostService.deleteInvite(validation.data.id);
+
+      return {
+        content: [{ type: 'text', text: `Invite ${validation.data.id} deleted successfully` }],
+        structuredContent: { success: true, id: validation.data.id },
+      };
+    } catch (error) {
+      console.error(`Error in ghost_delete_invite:`, error);
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: `Failed to delete invite: ${error.message}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// --- Webhook Management Tools ---
+
+// Create Webhook Tool
+server.registerTool(
+  'ghost_create_webhook',
+  {
+    description:
+      'Creates a new webhook in Ghost CMS. Webhooks notify external services when specific events occur (e.g., post published, member added). Requires event type and target URL.',
+    inputSchema: createWebhookSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(createWebhookSchema, rawInput, 'ghost_create_webhook');
+    if (!validation.success) {
+      return validation.error;
+    }
+
+    try {
+      console.error(`Executing tool: ghost_create_webhook`);
+      await loadServices();
+      const webhook = await ghostService.createWebhook(validation.data);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(webhook, null, 2) }],
+        structuredContent: { webhook },
+      };
+    } catch (error) {
+      console.error(`Error in ghost_create_webhook:`, error);
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: `Failed to create webhook: ${error.message}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Update Webhook Tool
+server.registerTool(
+  'ghost_update_webhook',
+  {
+    description:
+      'Updates an existing webhook in Ghost CMS. Can modify event type, target URL, name, or API version. Requires webhook ID.',
+    inputSchema: updateWebhookSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(updateWebhookSchema, rawInput, 'ghost_update_webhook');
+    if (!validation.success) {
+      return validation.error;
+    }
+
+    try {
+      console.error(`Executing tool: ghost_update_webhook`);
+      await loadServices();
+      const { id, ...webhookData } = validation.data;
+      const webhook = await ghostService.updateWebhook(id, webhookData);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(webhook, null, 2) }],
+        structuredContent: { webhook },
+      };
+    } catch (error) {
+      console.error(`Error in ghost_update_webhook:`, error);
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: `Failed to update webhook: ${error.message}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Delete Webhook Tool
+server.registerTool(
+  'ghost_delete_webhook',
+  {
+    description:
+      'Deletes a webhook from Ghost CMS. This permanently removes the webhook configuration. Requires webhook ID.',
+    inputSchema: deleteWebhookSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(deleteWebhookSchema, rawInput, 'ghost_delete_webhook');
+    if (!validation.success) {
+      return validation.error;
+    }
+
+    try {
+      console.error(`Executing tool: ghost_delete_webhook`);
+      await loadServices();
+      await ghostService.deleteWebhook(validation.data.id);
+
+      return {
+        content: [{ type: 'text', text: `Webhook ${validation.data.id} deleted successfully` }],
+        structuredContent: { success: true, id: validation.data.id },
+      };
+    } catch (error) {
+      console.error(`Error in ghost_delete_webhook:`, error);
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: `Failed to delete webhook: ${error.message}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// --- User Management Tools (Staff Members) ---
+
+// Get Users Tool
+server.registerTool(
+  'ghost_get_users',
+  {
+    description:
+      'Retrieves a list of staff users in Ghost CMS. Users are Ghost staff members (authors, editors, administrators). Supports pagination and filtering.',
+    inputSchema: userQuerySchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(userQuerySchema, rawInput, 'ghost_get_users');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const input = validation.data;
+
+    console.error(`Executing tool: ghost_get_users`);
+    try {
+      await loadServices();
+
+      const response = await ghostService.getUsers(input);
+      console.error(`Retrieved ${response.users?.length || 0} users`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(response, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_get_users:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'User query');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error getting users: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Get User Tool
+server.registerTool(
+  'ghost_get_user',
+  {
+    description:
+      'Retrieves a specific staff user by ID in Ghost CMS. Returns detailed information about the user including profile, bio, and role information.',
+    inputSchema: userIdSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(userIdSchema, rawInput, 'ghost_get_user');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const { id } = validation.data;
+
+    console.error(`Executing tool: ghost_get_user with ID: ${id}`);
+    try {
+      await loadServices();
+
+      const user = await ghostService.getUser(id);
+      console.error(`Retrieved user: ${user.name || user.email}`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(user, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_get_user:`, error);
+      return {
+        content: [{ type: 'text', text: `Error getting user: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Update User Tool
+server.registerTool(
+  'ghost_update_user',
+  {
+    description:
+      "Updates a staff user's profile in Ghost CMS. Can update name, email, bio, location, website, social media links, and profile/cover images. Cannot create new users (use invites for that).",
+    inputSchema: updateUserSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(updateUserSchema, rawInput, 'ghost_update_user');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const { id, ...userData } = validation.data;
+
+    console.error(`Executing tool: ghost_update_user for user ID: ${id}`);
+    try {
+      await loadServices();
+
+      const updatedUser = await ghostService.updateUser(id, userData);
+      console.error(`Successfully updated user: ${updatedUser.name || updatedUser.email}`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(updatedUser, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_update_user:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'User update data');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error updating user: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Delete User Tool
+server.registerTool(
+  'ghost_delete_user',
+  {
+    description:
+      'Deletes a staff user from Ghost CMS. Note: Cannot delete the currently authenticated user (self-delete protection). Use with caution as this action is permanent.',
+    inputSchema: deleteUserSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(deleteUserSchema, rawInput, 'ghost_delete_user');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const { id } = validation.data;
+
+    console.error(`Executing tool: ghost_delete_user for user ID: ${id}`);
+    try {
+      await loadServices();
+
+      const result = await ghostService.deleteUser(id);
+      console.error(`Successfully deleted user with ID: ${id}`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_delete_user:`, error);
+      return {
+        content: [{ type: 'text', text: `Error deleting user: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// --- Role Management Tools (Read-Only) ---
+
+// Get Roles Tool
+server.registerTool(
+  'ghost_get_roles',
+  {
+    description:
+      'Retrieves a list of all roles (permission levels) in Ghost CMS. Roles are read-only and define permissions for staff users (e.g., Administrator, Editor, Author, Contributor).',
+    inputSchema: roleQuerySchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(roleQuerySchema, rawInput, 'ghost_get_roles');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const input = validation.data;
+
+    console.error(`Executing tool: ghost_get_roles`);
+    try {
+      await loadServices();
+
+      const response = await ghostService.getRoles(input);
+      console.error(`Retrieved ${response.roles?.length || 0} roles`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(response, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_get_roles:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'Role query');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error getting roles: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Get Role Tool
+server.registerTool(
+  'ghost_get_role',
+  {
+    description:
+      'Retrieves details of a specific role by ID in Ghost CMS. Roles are read-only and cannot be modified via the API.',
+    inputSchema: roleIdSchema,
+  },
+  async (rawInput) => {
+    const validation = validateToolInput(roleIdSchema, rawInput, 'ghost_get_role');
+    if (!validation.success) {
+      return validation.errorResponse;
+    }
+    const { id } = validation.data;
+
+    console.error(`Executing tool: ghost_get_role for role ID: ${id}`);
+    try {
+      await loadServices();
+
+      const role = await ghostService.getRole(id);
+      console.error(`Retrieved role: ${role.name}`);
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(role, null, 2) }],
+      };
+    } catch (error) {
+      console.error(`Error in ghost_get_role:`, error);
+      if (error.name === 'ZodError') {
+        const validationError = ValidationError.fromZod(error, 'Role retrieval');
+        return {
+          content: [{ type: 'text', text: JSON.stringify(validationError.toJSON(), null, 2) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: `Error getting role: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
 // --- Main Entry Point ---
+
+let httpServer = null;
+
+const startHttpSseServer = async () => {
+  const port = mcpConfig.transport.port || 3001;
+  const sseEndpoint = mcpConfig.transport.sseEndpoint || '/mcp/sse';
+  const allowedOrigins = mcpConfig.security.allowedOrigins || ['*'];
+  const apiKey = mcpConfig.security.apiKey;
+
+  const app = express();
+  const legacySseEndpoint = '/sse';
+  const legacyMessagesEndpoint = '/messages';
+
+  const resolveIssuer = (req) => `${req.protocol}://${req.get('host')}`;
+  const buildProtectedResourceMetadata = (req) => {
+    const issuer = resolveIssuer(req);
+    return {
+      resource: `${issuer}${sseEndpoint}`,
+      authorization_servers: [issuer],
+      scopes_supported: [],
+      bearer_methods_supported: ['header'],
+    };
+  };
+  const buildAuthServerMetadata = (req) => {
+    const issuer = resolveIssuer(req);
+    return {
+      issuer,
+      authorization_endpoint: `${issuer}/authorize`,
+      token_endpoint: `${issuer}/token`,
+      registration_endpoint: `${issuer}/register`,
+      response_types_supported: ['code'],
+      grant_types_supported: ['authorization_code', 'refresh_token'],
+      code_challenge_methods_supported: ['S256'],
+      token_endpoint_auth_methods_supported: ['none'],
+    };
+  };
+  const oauthNotConfigured = (req, res) => {
+    res.status(501).json({
+      error: 'oauth_not_configured',
+      message: 'OAuth is not configured for this MCP server.',
+    });
+  };
+  const handleSseConnection = async (endpointForClient, req, res, next) => {
+    try {
+      // Note: Allow concurrent SSE connections - don't close existing transport
+      // if (server.server.transport) {
+      //   console.error('Existing MCP transport detected; closing before new SSE connection');
+      //   await server.close();
+      // }
+
+      const sseTransport = new SSEServerTransport(endpointForClient, res);
+      sseTransports.set(sseTransport.sessionId, sseTransport);
+      sseTransport.onclose = () => {
+        sseTransports.delete(sseTransport.sessionId);
+      };
+
+      await server.connect(sseTransport);
+    } catch (error) {
+      return next(error);
+    }
+  };
+
+  app.use(
+    express.json({
+      limit: '1mb',
+      strict: true,
+      type: 'application/json',
+    })
+  );
+
+  app.use(mcpCors(allowedOrigins));
+  if (apiKey) {
+    app.use(apiKeyAuth(apiKey));
+  }
+
+  app.get('/.well-known/oauth-protected-resource', (req, res) => {
+    res.json(buildProtectedResourceMetadata(req));
+  });
+  app.get('/.well-known/oauth-protected-resource/*', (req, res) => {
+    res.json(buildProtectedResourceMetadata(req));
+  });
+  app.get('/.well-known/oauth-authorization-server', (req, res) => {
+    res.json(buildAuthServerMetadata(req));
+  });
+  app.get('/.well-known/oauth-authorization-server/*', (req, res) => {
+    res.json(buildAuthServerMetadata(req));
+  });
+  app.get('/.well-known/openid-configuration', (req, res) => {
+    res.json(buildAuthServerMetadata(req));
+  });
+  app.get('/.well-known/openid-configuration/*', (req, res) => {
+    res.json(buildAuthServerMetadata(req));
+  });
+  app.get('/authorize', oauthNotConfigured);
+  app.post('/token', oauthNotConfigured);
+  app.post('/register', oauthNotConfigured);
+
+  app.get('/mcp/health', async (req, res, next) => {
+    try {
+      await loadServices();
+      const handler = healthCheck(ghostService);
+      return handler(req, res);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get('/health', async (req, res, next) => {
+    try {
+      await loadServices();
+      const handler = healthCheck(ghostService);
+      return handler(req, res);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get(sseEndpoint, (req, res, next) =>
+    handleSseConnection(SSE_MESSAGES_ENDPOINT, req, res, next)
+  );
+  app.get(legacySseEndpoint, (req, res, next) =>
+    handleSseConnection(legacyMessagesEndpoint, req, res, next)
+  );
+
+  app.post(SSE_MESSAGES_ENDPOINT, async (req, res, next) => {
+    try {
+      const sessionId = req.query.sessionId;
+      if (!sessionId || typeof sessionId !== 'string') {
+        res.status(400).json({ error: 'Missing sessionId parameter' });
+        return;
+      }
+
+      const transport = sseTransports.get(sessionId);
+      if (!transport) {
+        res.status(404).json({ error: 'Session not found' });
+        return;
+      }
+
+      await transport.handlePostMessage(req, res, req.body);
+    } catch (error) {
+      return next(error);
+    }
+  });
+  app.post(legacyMessagesEndpoint, async (req, res, next) => {
+    try {
+      const sessionId = req.query.sessionId;
+      if (!sessionId || typeof sessionId !== 'string') {
+        res.status(400).json({ error: 'Missing sessionId parameter' });
+        return;
+      }
+
+      const transport = sseTransports.get(sessionId);
+      if (!transport) {
+        res.status(404).json({ error: 'Session not found' });
+        return;
+      }
+
+      await transport.handlePostMessage(req, res, req.body);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.use(expressErrorHandler);
+
+  httpServer = app.listen(port, () => {
+    console.error(`Ghost MCP Server (HTTP/SSE) listening on port ${port}`);
+    console.error(`Health: http://localhost:${port}/mcp/health`);
+    console.error(`SSE: http://localhost:${port}${sseEndpoint}`);
+  });
+};
 
 async function main() {
   console.error('Starting Ghost MCP Server...');
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  const transportType = process.env.MCP_TRANSPORT || 'stdio';
 
-  console.error('Ghost MCP Server running on stdio transport');
+  switch (transportType) {
+    case 'stdio': {
+      const transport = new StdioServerTransport();
+      await server.connect(transport);
+      console.error('Ghost MCP Server running on stdio transport');
+      break;
+    }
+    case 'http':
+    case 'sse': {
+      await startHttpSseServer();
+      break;
+    }
+    default:
+      throw new Error(`Unknown transport type: ${transportType}`);
+  }
+
   console.error(
     'Available tools: ghost_get_tags, ghost_create_tag, ghost_get_tag, ghost_update_tag, ghost_delete_tag, ghost_upload_image, ' +
       'ghost_create_post, ghost_get_posts, ghost_get_post, ghost_search_posts, ghost_update_post, ghost_delete_post, ' +
       'ghost_get_pages, ghost_get_page, ghost_create_page, ghost_update_page, ghost_delete_page, ghost_search_pages, ' +
       'ghost_create_member, ghost_update_member, ghost_delete_member, ghost_get_members, ghost_get_member, ghost_search_members, ' +
       'ghost_get_newsletters, ghost_get_newsletter, ghost_create_newsletter, ghost_update_newsletter, ghost_delete_newsletter, ' +
-      'ghost_get_tiers, ghost_get_tier, ghost_create_tier, ghost_update_tier, ghost_delete_tier'
+      'ghost_get_tiers, ghost_get_tier, ghost_create_tier, ghost_update_tier, ghost_delete_tier, ' +
+      'ghost_get_offers, ghost_get_offer, ghost_create_offer, ghost_update_offer, ghost_delete_offer, ' +
+      'ghost_get_invites, ghost_create_invite, ghost_delete_invite, ' +
+      'ghost_create_webhook, ghost_update_webhook, ghost_delete_webhook, ' +
+      'ghost_get_users, ghost_get_user, ghost_update_user, ghost_delete_user, ' +
+      'ghost_get_roles, ghost_get_role'
   );
 }
+
+const shutdown = async () => {
+  try {
+    if (httpServer) {
+      await new Promise((resolve) => httpServer.close(resolve));
+    }
+    await server.close();
+  } catch (error) {
+    console.error('Error during shutdown:', error);
+  } finally {
+    process.exit(0);
+  }
+};
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 main().catch((error) => {
   console.error('Fatal error starting MCP server:', error);

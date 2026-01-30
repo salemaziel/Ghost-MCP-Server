@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-This document provides a comprehensive reference for all 34 MCP tools available in the Ghost MCP Server.
+This document provides a comprehensive reference for all 51 MCP tools available in the Ghost MCP Server.
 
 ## Breaking Changes
 
@@ -42,15 +42,20 @@ For better performance with large tag lists, use pagination instead:
 
 ## Overview
 
-| Resource    | Tools | Description                       |
-| ----------- | ----- | --------------------------------- |
-| Tags        | 5     | Create, read, update, delete tags |
-| Images      | 1     | Upload images to Ghost            |
-| Posts       | 6     | Full CRUD + search for posts      |
-| Pages       | 6     | Full CRUD + search for pages      |
-| Members     | 6     | Full CRUD + search for members    |
-| Newsletters | 5     | Full CRUD for newsletters         |
-| Tiers       | 5     | Full CRUD for membership tiers    |
+| Resource    | Tools | Description                            |
+| ----------- | ----- | -------------------------------------- |
+| Tags        | 5     | Create, read, update, delete tags      |
+| Images      | 1     | Upload images to Ghost                 |
+| Posts       | 6     | Full CRUD + search for posts           |
+| Pages       | 6     | Full CRUD + search for pages           |
+| Members     | 6     | Full CRUD + search for members         |
+| Newsletters | 5     | Full CRUD for newsletters              |
+| Tiers       | 5     | Full CRUD for membership tiers         |
+| **Roles**   | **2** | **Read-only access to staff roles**    |
+| **Offers**  | **5** | **Full CRUD for promotional offers**   |
+| **Users**   | **4** | **Browse, read, update, delete staff** |
+| **Webhooks**| **3** | **Create, update, delete webhooks**    |
+| **Invites** | **3** | **Send and manage staff invitations**  |
 
 ## Tool Response Format
 
@@ -789,6 +794,523 @@ Creates a membership tier.
   id: string; // Required
 }
 ```
+
+---
+
+## Role Tools
+
+### ghost_get_roles
+
+Retrieves a list of all available staff roles (read-only operation).
+
+**Schema:**
+
+```typescript
+{
+  // No parameters - retrieves all roles
+}
+```
+
+**Response Fields:**
+- `id`: Role ID (24-char hex)
+- `name`: Role name (Administrator, Editor, Author, Contributor, Owner)
+- `description`: Role description
+- `permissions`: Array of permission objects
+- `created_at`, `updated_at`: Timestamps
+
+**Example Response:**
+```json
+[
+  {
+    "id": "629b00d4ce9e990001234567",
+    "name": "Administrator",
+    "description": "Full site access",
+    "permissions": [...]
+  }
+]
+```
+
+**Use Cases:**
+- List available roles for staff invitations
+- Display role hierarchy
+- Check permission levels before operations
+
+### ghost_get_role
+
+Retrieves a specific role by ID.
+
+**Schema:**
+
+```typescript
+{
+  id: string;  // Required: 24-char hex Ghost role ID
+}
+```
+
+**Response:** Single role object with permissions.
+
+**Example:**
+```json
+{
+  "id": "629b00d4ce9e990001234567",
+  "name": "Editor",
+  "permissions": [...]
+}
+```
+
+---
+
+## Offer Tools
+
+### ghost_get_offers
+
+Retrieves a list of promotional offers with filtering and pagination.
+
+**Schema:**
+
+```typescript
+{
+  limit?: number;  // 1-100, default: 15
+  page?: number;   // default: 1
+  order?: string;  // e.g., "name ASC", "created_at DESC"
+  filter?: string; // NQL filter
+}
+```
+
+**Response Fields:**
+- `id`: Offer ID
+- `name`: Offer name
+- `code`: Redemption code (unique)
+- `display_title`, `display_description`: UI display text
+- `type`: `'percent'` or `'fixed'`
+- `amount`: Discount amount (percentage or currency amount)
+- `duration`: `'once'`, `'forever'`, `'repeating'`
+- `duration_in_months`: Number of months (if duration='repeating')
+- `currency`: Currency code (if type='fixed')
+- `status`: `'active'` or `'archived'`
+- `redemption_count`: Number of times redeemed
+- `tier`: Associated membership tier object
+
+**Example Response:**
+```json
+[
+  {
+    "id": "629b00d4ce9e990001234567",
+    "name": "Black Friday 2024",
+    "code": "BLACKFRIDAY24",
+    "type": "percent",
+    "amount": 50,
+    "duration": "once",
+    "status": "active",
+    "redemption_count": 42
+  }
+]
+```
+
+### ghost_get_offer
+
+Retrieves a specific offer by ID.
+
+**Schema:**
+
+```typescript
+{
+  id: string;  // Required: 24-char hex Ghost offer ID
+}
+```
+
+### ghost_create_offer
+
+Creates a new promotional offer.
+
+**Schema:**
+
+```typescript
+{
+  name: string;                    // Required: Offer name
+  code: string;                    // Required: Unique redemption code (uppercase alphanumeric, hyphens)
+  display_title?: string;          // Display name (defaults to name)
+  display_description?: string;    // Display description
+  type: 'percent' | 'fixed';       // Required: Discount type
+  amount: number;                  // Required: Discount amount (1-100 for percent, currency amount for fixed)
+  duration: 'once' | 'forever' | 'repeating';  // Required
+  duration_in_months?: number;     // Required if duration='repeating' (1-60)
+  currency?: string;               // Required if type='fixed' (e.g., 'USD', 'EUR')
+  status?: 'active' | 'archived';  // default: 'active'
+  tier_id?: string;                // Associated membership tier ID
+}
+```
+
+**Validation Rules:**
+- **code**: Must be unique, uppercase alphanumeric + hyphens only
+- **amount**: 1-100 for percent, positive for fixed
+- **duration_in_months**: Required only if duration='repeating', range 1-60
+- **currency**: Required only if type='fixed', must be valid 3-letter code
+
+**Example:**
+```json
+{
+  "name": "Summer Sale",
+  "code": "SUMMER2024",
+  "type": "percent",
+  "amount": 30,
+  "duration": "once",
+  "display_title": "30% Off Summer Sale"
+}
+```
+
+### ghost_update_offer
+
+Updates an existing offer.
+
+**Schema:**
+
+```typescript
+{
+  id: string;                      // Required: Offer ID to update
+  name?: string;
+  code?: string;                   // Must remain unique
+  display_title?: string;
+  display_description?: string;
+  type?: 'percent' | 'fixed';
+  amount?: number;
+  duration?: 'once' | 'forever' | 'repeating';
+  duration_in_months?: number;
+  currency?: string;
+  status?: 'active' | 'archived';
+  tier_id?: string;
+}
+```
+
+**Note:** Cannot change `type` if offer has been redeemed.
+
+### ghost_delete_offer
+
+Deletes an offer permanently.
+
+**Schema:**
+
+```typescript
+{
+  id: string;  // Required: Offer ID to delete
+}
+```
+
+**Warning:** Deletion is permanent and cannot be undone. Consider archiving (`status: 'archived'`) instead.
+
+---
+
+## User Tools
+
+### ghost_get_users
+
+Retrieves a list of staff users with filtering and pagination.
+
+**Schema:**
+
+```typescript
+{
+  limit?: number;  // 1-100, default: 15
+  page?: number;   // default: 1
+  order?: string;  // e.g., "name ASC", "created_at DESC"
+  filter?: string; // NQL filter (e.g., "status:active")
+  include?: string; // Relations to include (e.g., "count.posts,roles")
+}
+```
+
+**Response Fields:**
+- `id`: User ID (24-char hex)
+- `name`: Full name
+- `slug`: URL-friendly identifier
+- `email`: Email address
+- `profile_image`: Avatar URL
+- `cover_image`: Cover image URL
+- `bio`: Biography text
+- `website`: Personal website URL
+- `location`: Geographic location
+- `facebook`, `twitter`: Social media handles
+- `accessibility`: Accessibility settings JSON
+- `status`: `'active'`, `'inactive'`, `'locked'`
+- `meta_title`, `meta_description`: SEO fields
+- `tour`: Onboarding tour completion JSON
+- `last_seen`: Last activity timestamp
+- `created_at`, `updated_at`: Timestamps
+- `roles`: Array of role objects (if `include=roles`)
+- `count.posts`: Post count (if `include=count.posts`)
+
+**Example Response:**
+```json
+[
+  {
+    "id": "1",
+    "name": "Jane Doe",
+    "slug": "jane",
+    "email": "jane@example.com",
+    "status": "active",
+    "roles": [{ "name": "Editor" }],
+    "count": { "posts": 42 }
+  }
+]
+```
+
+### ghost_get_user
+
+Retrieves a specific user by ID or slug.
+
+**Schema:**
+
+```typescript
+{
+  id?: string;      // User ID (24-char hex)
+  slug?: string;    // User slug (URL-friendly)
+  include?: string; // Relations to include
+}
+```
+
+**Note:** Must provide either `id` or `slug`.
+
+### ghost_update_user
+
+Updates a staff user's profile and settings.
+
+**Schema:**
+
+```typescript
+{
+  id: string;               // Required: User ID to update
+  name?: string;            // Full name (1-191 chars)
+  slug?: string;            // URL-friendly slug (lowercase, alphanumeric + hyphens)
+  email?: string;           // Valid email address
+  bio?: string;             // Biography (max 200 chars)
+  website?: string;         // Valid URL
+  location?: string;        // Geographic location (max 150 chars)
+  facebook?: string;        // Facebook username (max 2000 chars)
+  twitter?: string;         // Twitter handle WITHOUT @ (max 2000 chars)
+  profile_image?: string;   // Avatar image URL
+  cover_image?: string;     // Cover image URL
+  meta_title?: string;      // SEO title (max 300 chars)
+  meta_description?: string;// SEO description (max 500 chars)
+  tour?: string;            // JSON string for tour completion state
+  accessibility?: string;   // JSON string for accessibility settings
+}
+```
+
+**Validation Rules:**
+- **slug**: Lowercase alphanumeric + hyphens only, must be unique
+- **email**: Must be valid format and unique
+- **twitter**: Do NOT include @ symbol
+- **bio**: Max 200 characters
+- **website**: Must be valid URL format
+- **tour**, **accessibility**: Must be valid JSON strings
+
+**Example:**
+```json
+{
+  "id": "629b00d4ce9e990001234567",
+  "name": "Jane Doe",
+  "bio": "Editor and content strategist",
+  "twitter": "janedoe",
+  "website": "https://janedoe.com"
+}
+```
+
+**Note:** Cannot update user roles via this tool. Use Ghost Admin UI for role changes.
+
+### ghost_delete_user
+
+Deletes a staff user permanently.
+
+**Schema:**
+
+```typescript
+{
+  id: string;  // Required: User ID to delete
+}
+```
+
+**Warning:** 
+- Deletion is permanent and cannot be undone
+- Cannot delete the site owner or your own account
+- Posts created by deleted users will remain but show "Unknown Author"
+
+---
+
+## Webhook Tools
+
+### ghost_create_webhook
+
+Creates a new webhook for Ghost events.
+
+**Schema:**
+
+```typescript
+{
+  event: string;          // Required: Event name (e.g., 'post.published', 'member.added')
+  target_url: string;     // Required: HTTPS webhook endpoint URL
+  name?: string;          // Optional: Webhook name (defaults to "{event} webhook")
+  secret?: string;        // Optional: Secret for HMAC signature validation
+  api_version?: string;   // Optional: Ghost API version (default: 'v5.0')
+  integration_id?: string;// Optional: Associated integration ID
+}
+```
+
+**Supported Events:**
+- **Posts**: `post.added`, `post.deleted`, `post.edited`, `post.published`, `post.unpublished`, `post.scheduled`, `post.unscheduled`, `post.rescheduled`
+- **Pages**: `page.added`, `page.deleted`, `page.edited`, `page.published`, `page.unpublished`, `page.scheduled`, `page.unscheduled`, `page.rescheduled`
+- **Tags**: `tag.added`, `tag.edited`, `tag.deleted`
+- **Members**: `member.added`, `member.edited`, `member.deleted`
+- **Site**: `site.changed`
+
+**Validation Rules:**
+- **target_url**: Must use HTTPS protocol (HTTP not allowed for security)
+- **event**: Must match one of the supported event names exactly
+- **secret**: Optional but recommended for signature verification
+- **name**: Max 191 characters
+
+**Example:**
+```json
+{
+  "event": "post.published",
+  "target_url": "https://api.example.com/webhooks/ghost",
+  "name": "Publish Notification",
+  "secret": "your-secret-key"
+}
+```
+
+**Security Notes:**
+- Always use HTTPS endpoints
+- Implement signature verification using the secret
+- Validate webhook payloads before processing
+
+### ghost_update_webhook
+
+Updates an existing webhook configuration.
+
+**Schema:**
+
+```typescript
+{
+  id: string;             // Required: Webhook ID to update
+  event?: string;         // Event name
+  target_url?: string;    // HTTPS webhook endpoint URL
+  name?: string;          // Webhook name
+  secret?: string;        // Secret for HMAC validation
+  api_version?: string;   // Ghost API version
+}
+```
+
+**Note:** Same validation rules apply as create webhook.
+
+### ghost_delete_webhook
+
+Deletes a webhook permanently.
+
+**Schema:**
+
+```typescript
+{
+  id: string;  // Required: Webhook ID to delete
+}
+```
+
+**Warning:** Deletion is permanent. No further event notifications will be sent.
+
+---
+
+## Invite Tools
+
+### ghost_get_invites
+
+Retrieves a list of pending staff invitations.
+
+**Schema:**
+
+```typescript
+{
+  limit?: number;  // 1-100, default: 15
+  page?: number;   // default: 1
+  order?: string;  // e.g., "created_at DESC"
+  filter?: string; // NQL filter
+}
+```
+
+**Response Fields:**
+- `id`: Invite ID (24-char hex)
+- `role_id`: Associated role ID
+- `email`: Invitee email address
+- `expires`: Expiration timestamp (ISO 8601)
+- `created_at`, `updated_at`: Timestamps
+- `status`: `'pending'` or `'sent'`
+
+**Example Response:**
+```json
+[
+  {
+    "id": "629b00d4ce9e990001234567",
+    "email": "neweditor@example.com",
+    "role_id": "629b00d4ce9e990001234568",
+    "status": "pending",
+    "expires": "2026-02-05T10:00:00.000Z"
+  }
+]
+```
+
+**Note:** Only pending/sent invites are shown. Accepted invites are automatically removed.
+
+### ghost_create_invite
+
+Sends a new staff invitation email.
+
+**Schema:**
+
+```typescript
+{
+  email: string;       // Required: Valid email address
+  role_id: string;     // Required: 24-char hex Ghost role ID
+  expires_at?: string; // Optional: ISO 8601 datetime (must be future, max 7 days)
+}
+```
+
+**Validation Rules:**
+- **email**: Must be valid format, not already a user or pending invite
+- **role_id**: Must be a valid Ghost role ID (get from `ghost_get_roles`)
+- **expires_at**: Must be future datetime, max 7 days from now (default: 7 days)
+
+**Example:**
+```json
+{
+  "email": "neweditor@example.com",
+  "role_id": "629b00d4ce9e990001234568"
+}
+```
+
+**Workflow:**
+1. Call `ghost_get_roles` to get valid role IDs
+2. Create invite with email and role_id
+3. Ghost sends invitation email automatically
+4. Invitee clicks link to accept (creates user account)
+5. Invite is automatically removed upon acceptance
+
+**Note:** Invites expire after 7 days by default. Expired invites must be deleted and recreated.
+
+### ghost_delete_invite
+
+Revokes a pending staff invitation.
+
+**Schema:**
+
+```typescript
+{
+  id: string;  // Required: Invite ID to delete
+}
+```
+
+**Use Cases:**
+- Cancel invitation before it's accepted
+- Remove expired invitations
+- Correct mistakes in role or email
+
+**Warning:** Deletion is immediate. The invitation link will no longer work.
 
 ---
 

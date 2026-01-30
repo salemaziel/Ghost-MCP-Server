@@ -40,6 +40,13 @@ export class ValidationError extends BaseError {
     this.errors = errors;
   }
 
+  toJSON() {
+    return {
+      ...super.toJSON(),
+      ...(this.errors.length > 0 && { errors: this.errors }),
+    };
+  }
+
   static fromJoi(joiError) {
     const errors = joiError.details.map((detail) => ({
       field: detail.path.join('.'),
@@ -47,6 +54,16 @@ export class ValidationError extends BaseError {
       type: detail.type,
     }));
     return new ValidationError('Validation failed', errors);
+  }
+
+  static fromZod(zodError, context = '') {
+    const errors = zodError.errors.map((err) => ({
+      field: err.path.join('.'),
+      message: err.message,
+      type: err.code,
+    }));
+    const message = context ? `${context}: Validation failed` : 'Validation failed';
+    return new ValidationError(message, errors);
   }
 }
 
@@ -422,7 +439,7 @@ export async function retryWithBackoff(fn, options = {}) {
       }
 
       const delay = ErrorHandler.getRetryDelay(attempt, error);
-      console.log(`Retry attempt ${attempt}/${maxAttempts} after ${delay}ms`);
+      console.error(`Retry attempt ${attempt}/${maxAttempts} after ${delay}ms`);
 
       await new Promise((resolve) => setTimeout(resolve, delay));
       onRetry(attempt, error);

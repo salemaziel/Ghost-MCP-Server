@@ -60,8 +60,9 @@ MCP_TRANSPORT=http npm run start:mcp
 
 **Endpoints:**
 
-- SSE Stream: `http://localhost:3001/mcp/sse`
-- Health Check: `http://localhost:3001/mcp/health`
+- SSE Stream: `http://localhost:3001/mcp/sse` (alias: `http://localhost:3001/sse`)
+- Message POST: `http://localhost:3001/mcp/messages` (alias: `http://localhost:3001/messages`)
+- Health Check: `http://localhost:3001/mcp/health` (alias: `http://localhost:3001/health`)
 
 **Example Client Connection:**
 
@@ -71,6 +72,12 @@ eventSource.onmessage = (event) => {
   const data = JSON.parse(event.data);
   console.log('Received:', data);
 };
+```
+
+**MCP Inspector Tip:** Use the `/sse` alias by default:
+
+```text
+http://localhost:3001/sse
 ```
 
 ### 3. WebSocket
@@ -128,6 +135,16 @@ MCP_WS_HEARTBEAT=30000
 # Allowed origins (comma-separated)
 MCP_ALLOWED_ORIGINS=http://localhost:3000,https://app.example.com
 ```
+
+## OAuth Discovery (HTTP/SSE)
+
+Clients that auto-discover OAuth metadata can use the following endpoints:
+
+- `/.well-known/oauth-protected-resource`
+- `/.well-known/oauth-authorization-server`
+- `/.well-known/openid-configuration`
+
+Note: OAuth is not implemented; these endpoints return minimal placeholder metadata.
 
 ## Error Handling
 

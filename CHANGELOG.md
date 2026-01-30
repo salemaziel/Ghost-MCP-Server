@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Team & Admin Management (v2.0.0) - 2026-01-29
+
+**New Features:**
+- **Roles Management** (2 tools) - Read-only access to staff roles and permissions
+  - `ghost_get_roles`: List all available staff roles
+  - `ghost_get_role`: Get specific role details with permissions
+
+- **Offers Management** (5 tools) - Full CRUD for promotional discounts and trials
+  - `ghost_get_offers`: Browse all promotional offers with filtering
+  - `ghost_get_offer`: Get specific offer details
+  - `ghost_create_offer`: Create new promotional offers (percent/fixed discounts)
+  - `ghost_update_offer`: Update existing offers
+  - `ghost_delete_offer`: Delete offers permanently
+
+- **Users Management** (4 tools) - Staff user administration
+  - `ghost_get_users`: Browse staff users with filtering
+  - `ghost_get_user`: Get specific user profile
+  - `ghost_update_user`: Update user profiles and settings
+  - `ghost_delete_user`: Delete staff users
+
+- **Webhooks Management** (3 tools) - Event notification configuration
+  - `ghost_create_webhook`: Set up webhooks for Ghost events
+  - `ghost_update_webhook`: Update webhook configuration
+  - `ghost_delete_webhook`: Delete webhooks
+
+- **Invites Management** (3 tools) - Staff invitation workflow
+  - `ghost_get_invites`: List pending staff invitations
+  - `ghost_create_invite`: Send staff invitation emails
+  - `ghost_delete_invite`: Revoke pending invitations
+
+**Implementation Details:**
+- 17 new MCP tools bringing total from 34 to 51 tools
+- 86 comprehensive tests with 100% passing (1363 total tests)
+- ~2,500 lines of production code
+  - 5 new schema files (558 lines) with Zod validation
+  - 17 service methods (409 lines) with circuit breaker support
+  - 17 MCP tool handlers (721 lines)
+  - 5 test suites (1,636 lines)
+
+**Commits:**
+- `a0d7250`: feat: add role management tools (read-only)
+- `5412a4b`: feat: add offer management tools (promotional discounts/trials)
+- `7fe82e5`: feat: add user management tools (staff members)
+- `712173e`: feat: add webhook management tools (event notifications)
+- `b64a836`: feat: add invite management tools (staff invitations)
+
+**Documentation:**
+- Updated TOOLS_REFERENCE.md with 5 new sections
+- Added comprehensive schema validation patterns
+- Documented all tool parameters and response formats
+- Added security notes for webhooks (HTTPS requirement)
+
 ### Breaking Changes
 
 #### ghost_get_tags Default Limit Changed (PR #87)

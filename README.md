@@ -31,7 +31,7 @@ _(Refer to `src/mcp_server.js` for full resource schemas.)_
 
 ### Tools Defined
 
-The Ghost MCP Server provides **34 tools** across 7 resource types. Below is a comprehensive guide:
+The Ghost MCP Server provides **51 tools** across 12 resource types for complete Ghost CMS management. Below is a comprehensive guide:
 
 ---
 
@@ -205,6 +205,101 @@ The Ghost MCP Server provides **34 tools** across 7 resource types. Below is a c
 34. **`ghost_delete_tier`** - Deletes a tier permanently.
     - `id` (string, required): The ID of the tier to delete.
 
+---
+
+#### Role Tools (2 tools) 🆕
+
+35. **`ghost_get_roles`** - Retrieves all available staff roles (read-only).
+    - No parameters - returns all roles with permissions.
+    - **Use Case**: Get role IDs for staff invitations.
+
+36. **`ghost_get_role`** - Retrieves a specific role by ID.
+    - `id` (string, required): The ID of the role.
+
+---
+
+#### Offer Tools (5 tools) 🆕
+
+37. **`ghost_get_offers`** - Retrieves promotional offers with filtering.
+    - `limit`, `page`, `order`, `filter` (optional): Query options.
+
+38. **`ghost_get_offer`** - Retrieves a specific offer by ID.
+    - `id` (string, required): The ID of the offer.
+
+39. **`ghost_create_offer`** - Creates a new promotional offer.
+    - `name` (string, required): Offer name.
+    - `code` (string, required): Unique redemption code (uppercase alphanumeric + hyphens).
+    - `type` ('percent' | 'fixed', required): Discount type.
+    - `amount` (number, required): Discount amount (1-100 for percent, currency amount for fixed).
+    - `duration` ('once' | 'forever' | 'repeating', required): How long discount applies.
+    - `duration_in_months` (number, optional): Required if duration='repeating' (1-60).
+    - `currency` (string, optional): Required if type='fixed' (e.g., 'USD').
+    - `tier_id` (string, optional): Associated membership tier.
+
+40. **`ghost_update_offer`** - Updates an existing offer.
+    - `id` (string, required): The ID of the offer to update.
+    - All other offer fields are optional.
+
+41. **`ghost_delete_offer`** - Deletes an offer permanently.
+    - `id` (string, required): The ID of the offer to delete.
+
+---
+
+#### User Tools (4 tools) 🆕
+
+42. **`ghost_get_users`** - Retrieves staff users with filtering.
+    - `limit`, `page`, `order`, `filter`, `include` (optional): Query options.
+
+43. **`ghost_get_user`** - Retrieves a specific user by ID or slug.
+    - `id` (string, optional): The ID of the user.
+    - `slug` (string, optional): The slug of the user.
+    - `include` (string, optional): Relations to include.
+
+44. **`ghost_update_user`** - Updates a staff user's profile.
+    - `id` (string, required): The ID of the user to update.
+    - `name`, `email`, `bio`, `website`, `location`, social media fields (optional).
+    - **Note**: Cannot update user roles via this tool.
+
+45. **`ghost_delete_user`** - Deletes a staff user permanently.
+    - `id` (string, required): The ID of the user to delete.
+    - **Warning**: Cannot delete site owner or your own account.
+
+---
+
+#### Webhook Tools (3 tools) 🆕
+
+46. **`ghost_create_webhook`** - Creates a new webhook for Ghost events.
+    - `event` (string, required): Event name (e.g., 'post.published', 'member.added').
+    - `target_url` (string, required): HTTPS webhook endpoint URL.
+    - `name` (string, optional): Webhook name.
+    - `secret` (string, optional): Secret for HMAC signature validation (recommended).
+    - **Security**: HTTPS required, signature verification recommended.
+
+47. **`ghost_update_webhook`** - Updates an existing webhook.
+    - `id` (string, required): The ID of the webhook to update.
+    - Event, URL, name, secret (optional).
+
+48. **`ghost_delete_webhook`** - Deletes a webhook permanently.
+    - `id` (string, required): The ID of the webhook to delete.
+
+---
+
+#### Invite Tools (3 tools) 🆕
+
+49. **`ghost_get_invites`** - Retrieves pending staff invitations.
+    - `limit`, `page`, `order`, `filter` (optional): Query options.
+
+50. **`ghost_create_invite`** - Sends a new staff invitation email.
+    - `email` (string, required): Valid email address.
+    - `role_id` (string, required): Ghost role ID (from `ghost_get_roles`).
+    - `expires_at` (string, optional): ISO 8601 datetime (max 7 days from now).
+    - **Workflow**: Ghost sends email → Invitee accepts → User account created.
+
+51. **`ghost_delete_invite`** - Revokes a pending invitation.
+    - `id` (string, required): The ID of the invite to delete.
+
+---
+
 ## Installation
 
 ### NPM Installation (Recommended)
@@ -261,6 +356,26 @@ MCP_TRANSPORT=stdio ghost-mcp
 MCP_TRANSPORT=http ghost-mcp
 MCP_TRANSPORT=websocket ghost-mcp
 ```
+
+### HTTP/SSE Endpoints (Inspector Compatibility)
+
+When using `MCP_TRANSPORT=http`, the server exposes the following endpoints:
+
+- **SSE stream:** `http://localhost:3001/mcp/sse` (alias: `http://localhost:3001/sse`)
+- **Message POST:** `http://localhost:3001/mcp/messages` (alias: `http://localhost:3001/messages`)
+- **Health:** `http://localhost:3001/mcp/health` (alias: `http://localhost:3001/health`)
+
+For MCP Inspector, use the `/sse` alias by default: `http://localhost:3001/sse`.
+
+#### OAuth Discovery
+
+The HTTP server returns minimal OAuth discovery metadata so clients that auto-discover OAuth don’t fail:
+
+- `/.well-known/oauth-protected-resource`
+- `/.well-known/oauth-authorization-server`
+- `/.well-known/openid-configuration`
+
+Note: OAuth is **not** implemented; these endpoints advertise placeholders only.
 
 ### Available npm Scripts
 

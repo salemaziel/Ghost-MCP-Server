@@ -1,10 +1,7 @@
 import {
   ErrorHandler,
-  BaseError,
   ValidationError,
-  NotFoundError,
   AuthenticationError,
-  AuthorizationError,
   RateLimitError,
 } from '../errors/index.js';
 import fs from 'fs/promises';
@@ -52,7 +49,7 @@ export class ErrorLogger {
         const rotatedPath = filePath.replace('.log', `-${timestamp}.log`);
         await fs.rename(filePath, rotatedPath);
       }
-    } catch (error) {
+    } catch (_error) {
       // File doesn't exist yet, which is fine
     }
   }
@@ -114,7 +111,7 @@ export class ErrorLogger {
 
   async logInfo(message, meta = {}) {
     if (['info', 'debug'].includes(this.logLevel)) {
-      console.log(`[INFO] ${message}`);
+      console.error(`[INFO] ${message}`);
       const entry = this.formatLogEntry('info', message, meta);
       await this.writeToFile('app', entry);
     }
@@ -130,7 +127,7 @@ export class ErrorLogger {
 
   async logDebug(message, meta = {}) {
     if (this.logLevel === 'debug') {
-      console.log(`[DEBUG] ${message}`);
+      console.error(`[DEBUG] ${message}`);
       const entry = this.formatLogEntry('debug', message, meta);
       await this.writeToFile('debug', entry);
     }
@@ -196,7 +193,7 @@ const errorMetrics = new ErrorMetrics();
 /**
  * Express Error Middleware
  */
-export function expressErrorHandler(err, req, res, next) {
+export function expressErrorHandler(err, req, res, _next) {
   // Log the error
   errorLogger.logError(err, {
     method: req.method,
@@ -449,11 +446,11 @@ export class GracefulShutdown {
     if (this.isShuttingDown) return;
 
     this.isShuttingDown = true;
-    console.log('Graceful shutdown initiated...');
+    console.error('Graceful shutdown initiated...');
 
     // Stop accepting new connections
     server.close(() => {
-      console.log('Server closed to new connections');
+      console.error('Server closed to new connections');
     });
 
     // Close existing connections

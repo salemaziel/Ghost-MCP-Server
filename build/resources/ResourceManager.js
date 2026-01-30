@@ -4,7 +4,7 @@
  */
 
 import { Resource } from '@modelcontextprotocol/sdk/server/index.js';
-import { NotFoundError, ValidationError, ErrorHandler } from '../errors/index.js';
+import { NotFoundError, ValidationError } from '../errors/index.js';
 import EventEmitter from 'events';
 
 /**
@@ -168,7 +168,7 @@ class ResourceFetcher {
     // Check cache
     const cached = this.cache.get(cacheKey);
     if (cached) {
-      console.log(`Cache hit for ${cacheKey}`);
+      console.error(`Cache hit for ${cacheKey}`);
       return cached;
     }
 
@@ -180,7 +180,7 @@ class ResourceFetcher {
         post = await this.ghostService.getPost(identifier, { include: 'tags,authors' });
         break;
 
-      case 'slug':
+      case 'slug': {
         const posts = await this.ghostService.getPosts({
           filter: `slug:${identifier}`,
           include: 'tags,authors',
@@ -188,8 +188,9 @@ class ResourceFetcher {
         });
         post = posts[0];
         break;
+      }
 
-      case 'uuid':
+      case 'uuid': {
         const postsByUuid = await this.ghostService.getPosts({
           filter: `uuid:${identifier}`,
           include: 'tags,authors',
@@ -197,6 +198,7 @@ class ResourceFetcher {
         });
         post = postsByUuid[0];
         break;
+      }
 
       default:
         throw new ValidationError(`Unknown identifier type: ${identifierType}`);
@@ -219,7 +221,7 @@ class ResourceFetcher {
     // Check cache
     const cached = this.cache.get(cacheKey);
     if (cached) {
-      console.log(`Cache hit for posts query`);
+      console.error(`Cache hit for posts query`);
       return cached;
     }
 
@@ -275,7 +277,7 @@ class ResourceFetcher {
     // Check cache
     const cached = this.cache.get(cacheKey);
     if (cached) {
-      console.log(`Cache hit for ${cacheKey}`);
+      console.error(`Cache hit for ${cacheKey}`);
       return cached;
     }
 
@@ -287,20 +289,23 @@ class ResourceFetcher {
         tag = await this.ghostService.getTag(identifier);
         break;
 
-      case 'slug':
+      case 'slug': {
         const tags = await this.ghostService.getTags();
         tag = tags.find((t) => t.slug === identifier);
         break;
+      }
 
-      case 'name':
-        const tagsByName = await this.ghostService.getTags(identifier);
+      case 'name': {
+        const tagsByName = await this.ghostService.getTags({ filter: `name:'${identifier}'` });
         tag = tagsByName[0];
         break;
+      }
 
-      default:
+      default: {
         // Assume it's a slug if no type specified
         const tagsBySlug = await this.ghostService.getTags();
         tag = tagsBySlug.find((t) => t.slug === identifier || t.id === identifier);
+      }
     }
 
     if (!tag) {
@@ -319,12 +324,16 @@ class ResourceFetcher {
     // Check cache
     const cached = this.cache.get(cacheKey);
     if (cached) {
-      console.log(`Cache hit for tags query`);
+      console.error(`Cache hit for tags query`);
       return cached;
     }
 
     // Fetch from Ghost
-    const tags = await this.ghostService.getTags(query.name);
+    const options = {};
+    if (query.name) {
+      options.filter = `name:'${query.name}'`;
+    }
+    const tags = await this.ghostService.getTags(options);
 
     // Apply client-side filtering if needed
     let filteredTags = tags;
@@ -395,7 +404,7 @@ class ResourceSubscriptionManager extends EventEmitter {
       this.startPolling(subscriptionId, pollingInterval);
     }
 
-    console.log(`Created subscription ${subscriptionId} for ${uri}`);
+    console.error(`Created subscription ${subscriptionId} for ${uri}`);
 
     return subscriptionId;
   }
@@ -413,7 +422,7 @@ class ResourceSubscriptionManager extends EventEmitter {
     // Remove subscription
     this.subscriptions.delete(subscriptionId);
 
-    console.log(`Removed subscription ${subscriptionId}`);
+    console.error(`Removed subscription ${subscriptionId}`);
   }
 
   startPolling(subscriptionId, interval) {
@@ -534,7 +543,7 @@ export class ResourceManager {
     try {
       const parsed = ResourceURIParser.parse(uri);
 
-      console.log('Fetching resource:', { uri: uri.substring(0, 100), parsed });
+      console.error('Fetching resource:', { uri: uri.substring(0, 100), parsed });
 
       // Route to appropriate fetcher
       switch (parsed.resourceType) {
@@ -600,7 +609,7 @@ export class ResourceManager {
    */
   invalidateCache(pattern = null) {
     this.cache.invalidate(pattern);
-    console.log(`Cache invalidated${pattern ? ` for pattern: ${pattern}` : ''}`);
+    console.error(`Cache invalidated${pattern ? ` for pattern: ${pattern}` : ''}`);
   }
 
   /**
@@ -652,7 +661,7 @@ export class ResourceManager {
 
     for (const pattern of patterns) {
       try {
-        const result = await this.fetchResource(pattern);
+        await this.fetchResource(pattern);
         prefetched.push({ pattern, status: 'success' });
       } catch (error) {
         prefetched.push({
